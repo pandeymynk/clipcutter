@@ -208,12 +208,121 @@ def enrich_loop(cfg: dict) -> None:
         time.sleep(3.0)
 
 
-def main(config_path: str | None = None) -> None:
+MAX_LIVE = 2   # live sessions per worker (each records a stream; ~1 CPU core while clipping)
+LIVE_RUNNING: dict[int, tuple] = {}
+
+
+def stop_all_live(*_) -> None:
+    """Worker is exiting: stop its ffmpeg / yt-dlp recorders too, so none are left orphaned."""
+    for sess, _, _ in list(LIVE_RUNNING.values()):
+        try:
+            sess.shutdown()
+        except Exception:
+            pass
+
+
+def live_manager(cfg: dict) -> None:
+    """Runs live sessions in their own threads; handles stop requests, time limits, credits, heartbeats."""
     import threading
+
+    from ..live import LiveSession
+
+    running = LIVE_RUNNING
+
+    def run_one(row, plan):
+        sid, uid = row["id"], row["user_id"]
+
+        def setstep(msg: str) -> None:
+            con = db.connect()
+            con.execute("UPDATE live_sessions SET step=?, updated=? WHERE id=?", (msg[:200], time.time(), sid))
+            con.close()
+
+        def credits_left() -> bool:
+            con = db.connect()
+            ok = db.clips_used(con, uid) < plan["clips"]
+            con.close()
+            return ok
+
+        def on_clip(rec: dict) -> None:
+            now = time.time()
+            with db.tx() as con:
+                key = f"live_{sid}"
+                con.execute("INSERT OR IGNORE INTO videos (key, url, title, status, step, created, updated) "
+                            "VALUES (?,?,?,?,?,?,?)", (key, row["url"], rec["source_title"], "live", "live", now, now))
+                n = con.execute("UPDATE live_sessions SET clips=clips+1, updated=? WHERE id=? RETURNING clips",
+                                (now, sid)).fetchone()[0]
+                con.execute("INSERT INTO clips (user_id, video_key, moment_id, status, step, pct, path, meta, "
+                            "watermark, created, updated) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                            (uid, key, n, "done", "Ready", 100, rec["path"], json.dumps(rec, ensure_ascii=False),
+                             int(plan["watermark"]), now, now))
+
+        lcfg = {**cfg, "watermark": WATERMARK if plan["watermark"] else None}
+        import os
+        seg = int(os.environ.get("CLIPCUTTER_LIVE_SEGMENT", "300"))   # seconds per chunk (smaller = faster clips)
+        sess = LiveSession(row["url"], db.DATA / "live" / str(uid), lcfg, segment_sec=seg, clips_per_segment=2,
+                           on_clip=on_clip, log=setstep, can_clip=credits_left)
+        running[sid] = (sess, time.time(), plan["live_min"] * 60)
+        status, err = "ended", None
+        try:
+            sess.run()
+            if sess.stop.is_set():
+                status = "stopped"
+        except Exception as e:
+            status, err = "failed", _friendly(e)
+            log(f"live {sid} failed: {e}")
+        finally:
+            sess.shutdown()
+            running.pop(sid, None)
+            con = db.connect()
+            con.execute("UPDATE live_sessions SET status=?, error=?, step=?, updated=? WHERE id=?",
+                        (status, err, {"ended": "Stream ended", "stopped": "Stopped", "failed": "Failed"}[status],
+                         time.time(), sid))
+            con.close()
+
+    while True:
+        try:
+            now = time.time()
+            con = db.connect()
+            for sid, (sess, t0, limit) in list(running.items()):      # heartbeat + stop + time limit
+                r = con.execute("SELECT stop FROM live_sessions WHERE id=?", (sid,)).fetchone()
+                if (r and r["stop"]) or now - t0 > limit:
+                    sess.stop.set()
+                    sess.shutdown()
+                con.execute("UPDATE live_sessions SET updated=? WHERE id=?", (now, sid))
+            # sessions whose worker died (no heartbeat for 2 min) go back in the queue
+            con.execute("UPDATE live_sessions SET status='queued' WHERE status='recording' AND updated<? AND stop=0",
+                        (now - 120,))
+            con.execute("UPDATE live_sessions SET status='stopped', step='Stopped' WHERE status='queued' AND stop=1")
+            con.close()
+            if len(running) < MAX_LIVE:
+                with db.tx() as con:
+                    row = con.execute("SELECT * FROM live_sessions WHERE status='queued' AND stop=0 "
+                                      "ORDER BY created LIMIT 1").fetchone()
+                    if row:
+                        con.execute("UPDATE live_sessions SET status='recording', step='Connecting to the stream…', "
+                                    "updated=? WHERE id=?", (now, row["id"]))
+                        user = con.execute("SELECT * FROM users WHERE id=?", (row["user_id"],)).fetchone()
+                if row:
+                    threading.Thread(target=run_one, args=(row, db.plan_of(user)), daemon=True).start()
+        except Exception as e:
+            log(f"live manager: {e}")
+        time.sleep(5)
+
+
+def main(config_path: str | None = None) -> None:
+    import atexit
+    import signal
+    import sys
+    import threading
+
+    atexit.register(stop_all_live)
+    for sig in (signal.SIGTERM, signal.SIGINT):   # main thread: handlers can be installed here
+        signal.signal(sig, lambda s, f: (stop_all_live(), sys.exit(0)))
 
     db.init()
     cfg = config.load(config_path)
     threading.Thread(target=enrich_loop, args=(cfg,), daemon=True).start()
+    threading.Thread(target=live_manager, args=(cfg,), daemon=True).start()
     log("worker started")
     last_clean = 0.0
     while True:

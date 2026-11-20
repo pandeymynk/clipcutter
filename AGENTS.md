@@ -47,6 +47,8 @@ frames, e.g. `ffmpeg -ss 3 -i output/<id>/clip_01.mp4 -frames:v 1 frame.png`.
 | `site/worker.py` | website worker: analyse → render, live-chat enrichment thread, cleanup |
 | `site/db.py` | SQLite schema + plans (`PLANS`) |
 | `site/static/index.html` | landing page + app (single file, vanilla JS), PWA files next to it |
+| `live.py` | **live mode**: ffmpeg records HLS in N-min segments, Twitch IRC / YouTube live-chat capture, per-segment clipping |
+| `translit.py` | Devanagari Hindi -> Roman Hinglish for captions |
 | `config.py` | defaults; users override with `config.yaml` (see `config.example.yaml`) |
 
 ## Website (multi-user)
@@ -91,6 +93,12 @@ Key rule: the website never downloads a whole video. It analyses text, then down
   talking head must not trigger the split layout (it duplicates the face).
 - **Web app jobs** are persisted and resume after a restart. Finished clips are skipped on resume
   (matched by start/end). `index.json` is rewritten after every clip so the UI shows clips as they finish.
+- **Live recording:** YouTube live serves video and audio as separate HLS streams. Resolve both URLs with yt-dlp and
+  let ffmpeg read + mux + segment them (`live._start_recorder`); piping yt-dlp to stdout fails for split formats.
+  URLs expire (~6 h), so the session restarts the recorder while the stream is still live. Each run gets a fresh folder.
+- **Live chat:** YouTube gift items (`giftMessageViewModel`) have no timestamp; they take the previous message's
+  wall time. In live mode chat is mapped by wall-clock (`wall0`), never by the stream's own offsets.
+- **Live quality gate:** `score.recommended` decides; weak moments are skipped before rendering (saves CPU + credits).
 - **Never block the pipeline on the LLM.** Any writer error falls back to templates (once per run).
 - **OS-specific code goes in `system.py` only.** Don't hard-code `/System/Library/...` or `videotoolbox` anywhere else.
 

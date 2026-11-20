@@ -206,6 +206,9 @@ footer a{color:var(--mut);text-decoration:none}footer a:hover{color:var(--txt)}
 .ed .reel{border-radius:18px;max-width:300px;margin:0 auto;container-type:inline-size;cursor:default}
 .sheet.wide{max-width:860px;max-height:92vh;overflow:auto}
 .capbar{display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:12px 14px;margin-bottom:16px}
+.livecard{margin-top:18px;border-color:rgba(255,84,112,.35);background:linear-gradient(180deg,rgba(255,84,112,.06),var(--panel))}
+.livedot{width:10px;height:10px;border-radius:50%;background:var(--bad);box-shadow:0 0 12px var(--bad);animation:pulse 1.2s infinite}
+@keyframes pulse{50%{opacity:.35}}
 .ed{display:grid;grid-template-columns:1.1fr .9fr;gap:20px;margin-top:6px}
 .ed .pv{position:relative;aspect-ratio:16/9;background:#000;border-radius:14px;overflow:hidden}
 .ed .pv iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
@@ -589,8 +592,40 @@ async function createPage(prefill){
     <form class="paste" id="addForm" style="max-width:none"><input type="url" id="url" placeholder="Paste a YouTube / Twitch / Kick link" autocomplete="off" aria-label="Video link">
       <button type="button" class="pastebtn" id="pasteBtn">Paste</button><button class="btn" id="go">Find moments</button></form>
     <div class="err" id="addErr"></div>
+    <div class="card livecard">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span class="livedot"></span><b style="font-size:16px">Live clipping</b>
+        <span style="color:var(--mut);font-size:13px">Clip a stream while it's live. Clips arrive about 5 minutes behind the stream.</span></div>
+      <form class="paste" id="liveForm" style="max-width:none;margin-top:12px;box-shadow:none">
+        <input type="url" id="liveUrl" placeholder="twitch.tv/channel · YouTube live link · kick.com/channel" autocomplete="off" aria-label="Live link">
+        <button class="btn" id="liveGo">🔴 Start</button></form>
+      <div class="err" id="liveErr"></div>
+      <div id="lives" class="list"></div>
+    </div>
     <div style="margin-top:26px" class="apphead"><h2 style="margin:0;font-size:20px">Your videos</h2></div>
     <div class="list" id="vids"><div class="skel" style="height:96px"></div><div class="skel" style="height:96px"></div></div>`);
+  $("#liveForm").onsubmit = async e => {
+    e.preventDefault(); const b = $("#liveGo"); b.disabled = true; b.innerHTML = `<span class="spin"></span>Starting…`; $("#liveErr").textContent = "";
+    try { await post("/api/live", {url: $("#liveUrl").value.trim()}); $("#liveUrl").value = ""; toast("Live clipping started 🔴"); liveTick(); }
+    catch(err){ if (err.auth) return boot(); $("#liveErr").textContent = err.message; if (err.status === 402) upsell(err.message); }
+    finally { b.disabled = false; b.textContent = "🔴 Start"; }
+  };
+  const liveTick = async () => {
+    if (!$("#lives")) return;
+    let ls; try { ls = await api("/api/live"); } catch(e) { return; }
+    const active = ls.filter(l => l.status === "queued" || l.status === "recording");
+    const recent = ls.filter(l => !active.includes(l)).slice(0, 3);
+    $("#lives").innerHTML = [...active, ...recent].map(l => {
+      const on = l.status === "recording" || l.status === "queued";
+      const pill = {recording:["bad","● LIVE"], queued:["run","connecting"], ended:["","ended"], stopped:["","stopped"], failed:["bad","failed"]}[l.status] || ["", l.status];
+      return `<div class="vrow" style="cursor:default"><div class="vmeta"><b>${esc(l.title || l.url)}</b>
+        <div class="s2">${esc(l.error || l.step || "")}</div>
+        <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="pill ${pill[0]}">${pill[1]}</span>
+          <span class="pill">${l.clips} clips</span>${l.clips ? `<a class="btn ghost sm" href="#clips">View clips</a>` : ""}
+          ${on ? `<button class="btn ghost sm" onclick="stopLive(${l.id})">■ Stop</button>` : ""}</div></div></div>`; }).join("");
+    if (active.length && $("#lives")) setTimeout(liveTick, 5000);
+  };
+  window.stopLive = async id => { if (!confirm("Stop live clipping? Clips made so far are kept.")) return; await post(`/api/live/${id}/stop`); toast("Stopping…"); liveTick(); };
+  liveTick();
   $("#pasteBtn").onclick = async () => { try { $("#url").value = (await navigator.clipboard.readText()).trim(); } catch(e) { toast("Long-press the box and choose Paste"); } };
   $("#addForm").onsubmit = async e => {
     e.preventDefault(); const b = $("#go"); b.disabled = true; b.innerHTML = `<span class="spin"></span>Adding…`; $("#addErr").textContent = "";

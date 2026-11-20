@@ -402,6 +402,62 @@ def make_clip(key: str, c: NewClip, user=Depends(current_user)):
         return {"id": cur.lastrowid}
 
 
+# ---------- live ----------
+
+def live_url(url: str) -> str:
+    """Live stream links: twitch.tv/<channel>, kick.com/<channel>, youtube watch / live / youtu.be."""
+    try:
+        u = urlparse(url.strip())
+    except ValueError:
+        raise HTTPException(400, "That doesn't look like a link.")
+    host = (u.hostname or "").lower().removeprefix("www.").removeprefix("m.")
+    path = u.path.rstrip("/")
+    if u.scheme in ("http", "https"):
+        if host == "twitch.tv" and re.fullmatch(r"/\w{3,25}", path):
+            return f"https://www.twitch.tv{path}"
+        if host == "kick.com" and re.fullmatch(r"/[\w-]{3,40}", path):
+            return f"https://kick.com{path}"
+        if host in ("youtube.com", "youtu.be"):
+            return video_key(url)[1] if not re.fullmatch(r"/@[\w.-]+(/live)?", path) else f"https://www.youtube.com{path.removesuffix('/live')}/live"
+    raise HTTPException(400, "Paste a live link: twitch.tv/<channel>, a YouTube live link, or kick.com/<channel>.")
+
+
+class NewLive(BaseModel):
+    url: str
+
+
+@app.post("/api/live", dependencies=[Depends(csrf)])
+def start_live(v: NewLive, user=Depends(current_user)):
+    url = live_url(v.url)
+    now = time.time()
+    with db.tx() as con:
+        if con.execute("SELECT 1 FROM live_sessions WHERE user_id=? AND status IN ('queued','recording')",
+                       (user["id"],)).fetchone():
+            raise HTTPException(409, "You already have a live session running. Stop it first.")
+        if db.clips_used(con, user["id"]) >= db.plan_of(user)["clips"]:
+            raise HTTPException(402, "You've used all your clips this month. Upgrade for more.")
+        cur = con.execute("INSERT INTO live_sessions (user_id, url, status, step, created, updated) VALUES (?,?,?,?,?,?)",
+                          (user["id"], url, "queued", "Connecting to the stream…", now, now))
+    return {"id": cur.lastrowid}
+
+
+@app.get("/api/live")
+def my_live(user=Depends(current_user)):
+    con = db.connect()
+    rows = con.execute("SELECT * FROM live_sessions WHERE user_id=? ORDER BY created DESC LIMIT 20", (user["id"],)).fetchall()
+    con.close()
+    return [{k: r[k] for k in ("id", "url", "title", "status", "step", "clips", "error", "created", "updated")} for r in rows]
+
+
+@app.post("/api/live/{sid}/stop", dependencies=[Depends(csrf)])
+def stop_live(sid: int, user=Depends(current_user)):
+    con = db.connect()
+    n = con.execute("UPDATE live_sessions SET stop=1, step='Stopping…', updated=? WHERE id=? AND user_id=? "
+                    "AND status IN ('queued','recording')", (time.time(), sid, user["id"])).rowcount
+    con.close()
+    return {"stopping": bool(n)}
+
+
 @app.get("/api/clips")
 def my_clips(user=Depends(current_user)):
     con = db.connect()
@@ -409,10 +465,13 @@ def my_clips(user=Depends(current_user)):
     con.close()
     out, cache = [], {}
     for r in rows:
-        a = cache.setdefault(r["video_key"], _analysis(r["video_key"]))
-        m = next((x for x in (a or {}).get("moments", []) if x["id"] == r["moment_id"]), {})
+        meta = json.loads(r["meta"]) if r["meta"] else None   # live clips
+        a = None if meta else cache.setdefault(r["video_key"], _analysis(r["video_key"]))
+        m = meta or next((x for x in (a or {}).get("moments", []) if x["id"] == r["moment_id"]), {})
         out.append({"id": r["id"], "status": r["status"], "step": r["step"], "pct": r["pct"], "error": r["error"],
-                    "video_key": r["video_key"], "video_title": (a or {}).get("title"), "hook": m.get("hook"),
+                    "live": bool(meta),
+                    "video_key": r["video_key"], "video_title": (meta or {}).get("source_title") or (a or {}).get("title"),
+                    "hook": m.get("hook"), "recommended": m.get("recommended", True),
                     "post_caption": m.get("post_caption"), "virality": m.get("virality"), "created": r["created"],
                     "file": f"/api/clips/{r['id']}/file" if r["status"] == "done" else None})
     return out

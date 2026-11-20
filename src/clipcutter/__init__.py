@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 
 
 def _common(sp: argparse.ArgumentParser) -> None:
@@ -37,6 +38,14 @@ def main() -> None:
     r.add_argument("target", help="URL or path to a video file")
     r.add_argument("--chat", help="chat log file (optional)")
     _common(r)
+
+    lv = sub.add_parser("live", help="clip a stream WHILE it's live (clips arrive a few minutes behind)")
+    lv.add_argument("url", help="live stream link: twitch.tv/<channel>, youtube.com/watch?v=<live id>, kick.com/<channel>")
+    lv.add_argument("--segment", type=float, default=5, help="minutes per chunk (smaller = faster clips)")
+    lv.add_argument("--per-segment", type=int, default=2, help="max clips per chunk")
+    lv.add_argument("--out", default="output/live")
+    lv.add_argument("--keep-weak", action="store_true", help="also render moments the quality gate rejects")
+    _common(lv)
 
     a = sub.add_parser("add", help="track a creator (channel URL)")
     a.add_argument("url")
@@ -93,6 +102,18 @@ def main() -> None:
         if args.cmd == "run":
             from . import pipeline
             pipeline.run(args.target, cfg, args.chat)
+        elif args.cmd == "live":
+            from pathlib import Path
+            from .live import LiveSession
+            sess = LiveSession(args.url, Path(args.out), cfg, segment_sec=int(args.segment * 60),
+                               clips_per_segment=args.per_segment, keep_weak=args.keep_weak,
+                               log=lambda m: print(time.strftime("[%H:%M:%S] ") + m, flush=True))
+            try:
+                n = sess.run()
+            except KeyboardInterrupt:
+                sess.shutdown()
+                n = sess.n_clips
+            print(f"{n} clips in {getattr(sess, 'dir', args.out)}")
         elif args.cmd == "add":
             c = tracker.add(args.url, args.name, args.keyword, args.permission)
             print(f"tracking {c['name']} ({c['platform']}). run: clipcutter track")

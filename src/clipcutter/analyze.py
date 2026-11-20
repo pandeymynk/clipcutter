@@ -77,8 +77,32 @@ def scene_cuts(video: Path, seconds: int, work: Path) -> np.ndarray:
 
 # ---------- chat ----------
 
-def _chat_items(path: Path):
-    """Yield (seconds, text) from the chat formats we know about."""
+def _yt_item(item: dict, offset: float | None):
+    """One YouTube live-chat renderer -> chat dict (offset = video time, or None for a live stream)."""
+    kinds = {"liveChatTextMessageRenderer": "text", "liveChatPaidMessageRenderer": "paid",
+             "liveChatPaidStickerRenderer": "paid", "liveChatMembershipItemRenderer": "member",
+             "liveChatSponsorshipsGiftPurchaseAnnouncementRenderer": "gift"}
+    for key, vm in item.items():   # newer "view model" items, e.g. giftMessageViewModel ("sent Speed bolt")
+        if key.endswith("ViewModel") and isinstance(vm, dict):
+            msg = (vm.get("text") or {}).get("content", "") if isinstance(vm.get("text"), dict) else ""
+            user = (vm.get("authorName") or {}).get("content", "?") if isinstance(vm.get("authorName"), dict) else "?"
+            kind = "gift" if "gift" in key.lower() else "paid" if "paid" in key.lower() else "text"
+            return {"t": offset, "wall": None, "msg": msg, "user": user.strip(), "kind": kind}
+    for key, kind in kinds.items():
+        rend = item.get(key)
+        if not rend:
+            continue
+        runs = (rend.get("message") or rend.get("headerSubtext") or {}).get("runs", [])
+        msg = "".join(x.get("text") or (x.get("emoji", {}).get("shortcuts") or [""])[0] for x in runs)
+        user = (rend.get("authorExternalChannelId") or (rend.get("authorName") or {}).get("simpleText") or "?")
+        wall = int(rend["timestampUsec"]) / 1e6 if rend.get("timestampUsec") else None
+        return {"t": offset, "wall": wall, "msg": msg, "user": user, "kind": kind}
+    return None
+
+
+def chat_items(path: Path):
+    """Yield chat dicts {t (video seconds) or wall (epoch), msg, user, kind} from every format we know:
+    yt-dlp YouTube live_chat (replay or live), TwitchDownloader, chat-downloader, our own live JSONL."""
     text = path.read_text(encoding="utf-8", errors="ignore").strip()
     if not text:
         return
@@ -95,46 +119,81 @@ def _chat_items(path: Path):
                 try:
                     records.append(json.loads(line))
                 except json.JSONDecodeError:
-                    pass
+                    pass   # a live file can end with a half-written line
 
+    last_wall = None
     for r in records:
-        # YouTube live chat replay (yt-dlp .live_chat.json)
+        if not isinstance(r, dict):   # partial / joined live files can contain stray non-object lines
+            continue
         replay = r.get("replayChatItemAction")
-        if replay:
-            t = int(replay.get("videoOffsetTimeMsec", 0)) / 1000
-            for act in replay.get("actions", []):
-                item = act.get("addChatItemAction", {}).get("item", {})
-                rend = item.get("liveChatTextMessageRenderer") or item.get("liveChatPaidMessageRenderer")
-                if rend:
-                    runs = rend.get("message", {}).get("runs", [])
-                    msg = "".join(x.get("text") or x.get("emoji", {}).get("shortcuts", [""])[0] for x in runs)
-                    yield t, msg
+        if replay or "addChatItemAction" in json.dumps(r)[:200]:
+            acts = replay.get("actions", []) if replay else [r]
+            off = int(replay["videoOffsetTimeMsec"]) / 1000 if replay and replay.get("videoOffsetTimeMsec") else None
+            for act in acts:
+                d = _yt_item(act.get("addChatItemAction", {}).get("item", {}), off)
+                if d:
+                    if d["wall"] is None and d["t"] is None:   # gift items carry no time: chat arrives in order
+                        d["wall"] = last_wall
+                    last_wall = d["wall"] or last_wall
+                    yield d
             continue
-        # TwitchDownloader / Twitch API comments
-        if "content_offset_seconds" in r:
+        if "content_offset_seconds" in r:   # TwitchDownloader
             body = r.get("message", {})
-            yield float(r["content_offset_seconds"]), body.get("body", "") if isinstance(body, dict) else str(body)
+            yield {"t": float(r["content_offset_seconds"]), "wall": None,
+                   "msg": body.get("body", "") if isinstance(body, dict) else str(body),
+                   "user": (r.get("commenter") or {}).get("_id", "?"),
+                   "kind": "paid" if isinstance(body, dict) and body.get("bits_spent") else "text"}
             continue
-        # chat-downloader and simple formats
-        for tk in ("time_in_seconds", "offset", "time", "t"):
+        if "wall" in r:                      # our live capture (Twitch IRC / Kick)
+            yield {"t": None, "wall": float(r["wall"]), "msg": str(r.get("message", "")),
+                   "user": str(r.get("user", "?")), "kind": r.get("kind", "text")}
+            continue
+        for tk in ("time_in_seconds", "offset", "time", "t"):   # chat-downloader and simple formats
             if tk in r:
-                yield float(r[tk]), str(r.get("message") or r.get("text") or "")
+                a = r.get("author")
+                yield {"t": float(r[tk]), "wall": None, "msg": str(r.get("message") or r.get("text") or ""),
+                       "user": str(a.get("id") if isinstance(a, dict) else a or r.get("user") or "?"),
+                       "kind": "paid" if r.get("money") else "text"}
                 break
 
 
-def chat_activity(path: Path | None, seconds: int, delay: int) -> tuple[np.ndarray | None, dict]:
-    """Weighted messages per second, shifted back by `delay` to line up with the moment."""
-    if not path or not path.exists():
-        return None, {}
+KIND_WEIGHT = {"text": 1.0, "paid": 5.0, "gift": 4.0, "member": 3.0}   # money/actions are stronger votes
+
+
+def chat_activity(path: Path | None, seconds: int, delay: int, wall0: float | None = None,
+                  items: list | None = None) -> tuple[np.ndarray | None, dict]:
+    """Chat 'votes' per second, shifted back by `delay` to line up with the moment.
+
+    Smart scoring (ideas from open-source live clippers):
+    - one viewer counts at most twice per 10 s (spam can't fake a highlight)
+    - hype words/emotes x2, super chats/bits x5, gifts x4, new members x3
+    wall0: epoch time of video second 0, for live chat that only has wall-clock timestamps."""
+    if items is None:
+        if not path or not path.exists():
+            return None, {}
+        items = list(chat_items(path))
     out = np.zeros(seconds, dtype=np.float32)
     samples: dict[int, list[str]] = {}
+    per_user: dict[tuple, int] = {}
     n = 0
-    for t, msg in _chat_items(path):
+    for it in items:
+        # live: wall-clock wins (offsets may count from the stream's start, not from when we joined)
+        t = it["wall"] - wall0 if (wall0 and it.get("wall")) else it.get("t")
+        if t is None:
+            continue
         sec = int(t) - delay
-        if 0 <= sec < seconds:
-            out[sec] += 2.0 if HYPE_CHAT.search(msg) else 1.0
-            samples.setdefault(sec, []).append(msg)
-            n += 1
+        if not 0 <= sec < seconds:
+            continue
+        user = it.get("user") or "?"
+        if user != "?":   # unknown authors (some chat exports) can't be capped per user
+            key = (user, sec // 10)
+            per_user[key] = per_user.get(key, 0) + 1
+            if per_user[key] > 2 and it.get("kind", "text") == "text":
+                continue
+        w = KIND_WEIGHT.get(it.get("kind", "text"), 1.0) * (2.0 if HYPE_CHAT.search(it["msg"]) else 1.0)
+        out[sec] += w
+        samples.setdefault(sec, []).append(it["msg"])
+        n += 1
     if n == 0:
         return None, {}
     return out, samples

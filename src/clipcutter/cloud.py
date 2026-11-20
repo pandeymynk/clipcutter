@@ -104,7 +104,8 @@ def analyze_url(url: str, cfg: dict, cache: Path, n_moments: int = 12, progress:
         moments.append({
             "id": i, "start": m.start, "end": m.end, "peak": float(peak),
             "hook_start": hook_start, "hook_dur": min(cfg["hook"]["seconds"], m.end - hook_start),
-            "score": m.score, "virality": int(round(60 + 38 * rel[id(m)])), "signals": m.reasons,
+            "score": m.score, "virality": (vir := int(round(60 + 38 * rel[id(m)]))), "signals": m.reasons,
+            "recommended": score.recommended(m.reasons, vir, sum(v is not None for v in signals.values())),
             "transcript": transcript, "words": m.words, **meta,
             "post_caption": f"{meta['description']} {' '.join(meta['hashtags'])}".strip(),
         })

@@ -11,11 +11,11 @@ DATA = Path(os.environ.get("CLIPCUTTER_DATA", "data")).resolve()
 DB_PATH = DATA / "clipcutter.db"
 
 PLANS = {
-    # name: clips per month, max video length (s), watermark, label, price per month / year (₹)
-    "free":    {"clips": 10,  "max_len": 3 * 3600,  "watermark": True,  "label": "Free",    "month": 0,    "year": 0},
-    "starter": {"clips": 50,  "max_len": 24 * 3600, "watermark": False, "label": "Starter", "month": 199,  "year": 1990},
-    "creator": {"clips": 150, "max_len": 24 * 3600, "watermark": False, "label": "Creator", "month": 499,  "year": 4990},
-    "pro":     {"clips": 500, "max_len": 24 * 3600, "watermark": False, "label": "Pro",     "month": 1499, "year": 14990},
+    # clips per month, max video length (s), watermark, live minutes per session, label, price per month / year (₹)
+    "free":    {"clips": 10,  "max_len": 3 * 3600,  "watermark": True,  "live_min": 30,  "label": "Free",    "month": 0,    "year": 0},
+    "starter": {"clips": 50,  "max_len": 24 * 3600, "watermark": False, "live_min": 720, "label": "Starter", "month": 199,  "year": 1990},
+    "creator": {"clips": 150, "max_len": 24 * 3600, "watermark": False, "live_min": 720, "label": "Creator", "month": 499,  "year": 4990},
+    "pro":     {"clips": 500, "max_len": 24 * 3600, "watermark": False, "live_min": 720, "label": "Pro",     "month": 1499, "year": 14990},
 }
 
 SCHEMA = """
@@ -39,6 +39,11 @@ CREATE TABLE IF NOT EXISTS clips (
   step TEXT, pct REAL DEFAULT 0, path TEXT, error TEXT, watermark INTEGER NOT NULL DEFAULT 0,
   priority INTEGER NOT NULL DEFAULT 0, claimed REAL, created REAL NOT NULL, updated REAL NOT NULL,
   UNIQUE (user_id, video_key, moment_id));
+CREATE TABLE IF NOT EXISTS live_sessions (
+  id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  url TEXT NOT NULL, title TEXT, status TEXT NOT NULL DEFAULT 'queued',   -- queued | recording | ended | failed | stopped
+  step TEXT, clips INTEGER NOT NULL DEFAULT 0, stop INTEGER NOT NULL DEFAULT 0, error TEXT,
+  created REAL NOT NULL, updated REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS clips_queue ON clips(status, priority DESC, created);
 CREATE INDEX IF NOT EXISTS videos_queue ON videos(status, created);
 CREATE INDEX IF NOT EXISTS clips_user ON clips(user_id, created);
@@ -76,8 +81,11 @@ def init() -> None:
     if "enrich" not in cols:   # phase-2 live-chat state: NULL | pending | working | done | skipped
         con.execute("ALTER TABLE videos ADD COLUMN enrich TEXT")
         con.execute("ALTER TABLE videos ADD COLUMN enrich_claimed REAL")
-    if "opts" not in {r["name"] for r in con.execute("PRAGMA table_info(clips)")}:   # editor choices (JSON)
+    ccols = {r["name"] for r in con.execute("PRAGMA table_info(clips)")}
+    if "opts" not in ccols:   # editor choices (JSON)
         con.execute("ALTER TABLE clips ADD COLUMN opts TEXT")
+    if "meta" not in ccols:   # live clips carry their own hook/caption (no analysis.json)
+        con.execute("ALTER TABLE clips ADD COLUMN meta TEXT")
     con.close()
 
 

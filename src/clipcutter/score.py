@@ -57,7 +57,11 @@ def audio_signal(db: np.ndarray) -> np.ndarray:
 def chat_signal(rate: np.ndarray) -> np.ndarray:
     sm = _smooth(rate, 5)
     base = _rolling(sm, 121, np.median)
-    return _unit(np.log1p(sm) - np.log1p(base), 1.5)
+    level = _unit(np.log1p(sm) - np.log1p(base), 1.5)
+    # burst bonus: chat jumping up fast (vs the previous 20 s) is the strongest live reaction
+    prev = np.concatenate([np.zeros(20, dtype=sm.dtype), sm[:-20]]) if len(sm) > 20 else np.zeros_like(sm)
+    burst = _unit(np.log1p(sm) - np.log1p(prev), 1.2)
+    return np.clip(0.75 * level + 0.35 * burst, 0, 1)
 
 
 def visual_signal(cuts: np.ndarray) -> np.ndarray:
@@ -100,10 +104,24 @@ def replay_signal(heatmap: list[dict] | None, seconds: int) -> np.ndarray | None
 
 
 def combine(signals: dict[str, np.ndarray | None], weights: dict) -> np.ndarray:
-    present = {k: v for k, v in signals.items() if v is not None}
+    """Weighted mix + resonance: a moment where several signals rise together (loud AND chat AND
+    hype words) is real; one signal alone is often music, spam or a random loud noise."""
+    present = {k: v for k, v in signals.items() if v is not None and weights.get(k, 0) > 0}
     total = sum(weights[k] for k in present)
     out = sum(weights[k] / total * v for k, v in present.items())
+    if len(present) >= 2:
+        strong = sum((_smooth(v, 7) > 0.45).astype(np.float32) for v in present.values())
+        out = out * (0.75 + 0.18 * np.minimum(strong, 3))   # 1 signal x0.93 · 2 x1.11 · 3+ x1.29
     return _smooth(out, 3)
+
+
+def recommended(signal_names: list[str], virality: int, n_signals: int) -> bool:
+    """Quality gate: weak clips are flagged 'not recommended' instead of being posted blindly."""
+    if virality >= 85:
+        return True
+    if "chat" in signal_names and virality >= 72:   # many different viewers reacting at once (spam is capped)
+        return True
+    return virality >= 70 and (len(signal_names) >= 2 or n_signals <= 1)
 
 
 def candidates(score: np.ndarray, n: int, gap: int, skip_edges: int = 3) -> list[Moment]:

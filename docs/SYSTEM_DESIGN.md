@@ -35,6 +35,19 @@ Both work.
 
 ---
 
+## 1b. Live mode (clip while the stream is live)
+
+| Step | How | Cost |
+|---|---|---|
+| Record | yt-dlp resolves the HLS URLs; ffmpeg records 720p in 5-min `.ts` segments, stream copy | ~0 CPU, 1.5–3 GB/h bandwidth |
+| Chat | Twitch anonymous IRC / YouTube live chat via yt-dlp, wall-clock timestamps | ₹0 |
+| Per segment | loudness + smart chat votes (per-user cap, paid/gift weight, burst bonus), resonance, quality gate | <1 s |
+| Clip | only strong moments: transcribe that window, hook, render from the local segment(s) | ~30–60 s per clip |
+
+Clips land about one segment length behind the stream. The worker runs up to 2 live sessions (`MAX_LIVE`) in
+threads. A heartbeat requeues sessions whose worker died. Recorders are stopped when the worker exits. Free plan:
+30 min per session, paid: 12 h. Every clip uses one credit, and the session stops when credits run out.
+
 ## 2. Architecture
 
 ```
