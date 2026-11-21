@@ -165,12 +165,15 @@ def draw_caption(img, words: list[str], active: int, cfg: dict, W: int):
 
 # ---------- overlay timeline ----------
 
-def caption_chunks(words: list[dict], per_chunk: int, style: str) -> list[list[dict]]:
+def caption_chunks(words: list[dict], per_chunk: int, style: str, censor_words: bool = False) -> list[list[dict]]:
     chunks, cur = [], []
     for i, w in enumerate(words):
         txt = w["w"].strip()
+        if censor_words:
+            from .writer import censor
+            txt = censor(txt)
         # keep Hindi letters AND vowel signs (matras are not \w)
-        txt = re.sub(r"[^\w'?!ऀ-ॿ-]", "", txt) if style != "clean" else txt
+        txt = re.sub(r"[^\w'?!*ऀ-ॿ-]", "", txt) if style != "clean" else txt
         if style == "genz":
             txt = txt.lower().rstrip(".,")
         if not txt:
@@ -204,7 +207,7 @@ def build_overlay(clip: dict, cfg: dict, out_dir: Path) -> Path:
         if cfg["captions"].get("lang", "auto") != "original":   # Hindi -> Hinglish (Roman) captions by default
             from .translit import hinglish
             words = [{**w, "w": hinglish(w["w"])} for w in words]
-        chunks = caption_chunks(words, cfg["captions"]["words_per_chunk"], cfg["style"])
+        chunks = caption_chunks(words, cfg["captions"]["words_per_chunk"], cfg["style"], cfg["captions"].get("censor", False))
         for ci, ch in enumerate(chunks):
             chunk_end = chunks[ci + 1][0]["s"] if ci + 1 < len(chunks) else ch[-1]["e"] + 0.4
             chunk_end = min(chunk_end, ch[-1]["e"] + 0.8)
@@ -215,7 +218,13 @@ def build_overlay(clip: dict, cfg: dict, out_dir: Path) -> Path:
                                tuple(x["t"] for x in ch), wi))
 
     hook_until = hook_d if hook_d > 0 else 2.2
-    cuts = {0.0, total, hook_until}
+    cta_from = max(hook_until, total - 3.0) if cfg.get("cta") else total + 1   # campaign end card: last 3 s
+    logo = None
+    if cfg.get("logo"):   # campaign logo overlay, required on every frame by some briefs
+        logo = Image.open(cfg["logo"]).convert("RGBA")
+        lw = int(W * 0.45)
+        logo = logo.resize((lw, int(logo.height * lw / logo.width)), Image.LANCZOS)
+    cuts = {0.0, total, hook_until, min(cta_from, total)}
     for e in events:
         cuts.update((max(0.0, e[0]), min(total, e[1])))
     cuts = sorted(c for c in cuts if 0 <= c <= total)
@@ -230,17 +239,22 @@ def build_overlay(clip: dict, cfg: dict, out_dir: Path) -> Path:
             continue
         mid = (a + b) / 2
         show_hook = mid < hook_until
-        show_head = cfg["header"] and not show_hook
+        show_cta = mid >= cta_from
+        show_head = cfg["header"] and not show_hook and not show_cta
         cap = next((e for e in events if e[0] <= mid < e[1]), None)
-        key = (show_hook, show_head, cap[2] if cap else None, cap[3] if cap else None)
+        key = (show_hook, show_head, show_cta, cap[2] if cap else None, cap[3] if cap else None)
         if key not in cache:
             img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
             if show_hook:
                 draw_box_text(img, clip["hook"], hook_font, hook_y, W)
             if show_head:
                 draw_box_text(img, clip["hook"], head_font, head_y, W, SAFE_W)
+            if show_cta:
+                draw_box_text(img, cfg["cta"], head_font, head_y, W, SAFE_W)
             if cap and not show_hook:
                 draw_caption(img, list(cap[2]), cap[3], cfg["captions"], W)
+            if logo is not None:   # centred below the (2-line) hook box, above the captions
+                img.alpha_composite(logo, ((W - logo.width) // 2, hook_y + 250))
             if cfg.get("watermark"):  # free plan
                 wm_font = _font(system.bold_font(cfg["captions"].get("font")), 34)
                 wm = cfg["watermark"]
@@ -267,11 +281,13 @@ def _layout_filter(cfg: dict, src: dict) -> str:
         return f"[cv]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}[lv]"
     if layout in ("split", "split_top") and cfg.get("facecam"):
         x, y, w, h = cfg["facecam"]
-        cam_h = int(H * 0.35) // 2 * 2
+        cam_h = int(H * cfg.get("cam_frac", 0.35)) // 2 * 2   # campaigns where the streamer must be the focus use 0.5
         order = "[cam][game]" if layout == "split_top" else "[game][cam]"   # default: gameplay on top, face below
         return (
             f"[cv]split=2[c1][c2];"
-            f"[c1]crop=iw*{w}:ih*{h}:iw*{x}:ih*{y},scale={W}:{cam_h}:force_original_aspect_ratio=increase,crop={W}:{cam_h}[cam];"
+            f"[c1]crop=iw*{w}:ih*{h}:iw*{x}:ih*{y},deblock=filter=strong:block=8,"   # webcams are tiny: hide blocks before the ~4x upscale
+            f"scale={W}:{cam_h}:force_original_aspect_ratio=increase:flags=lanczos,crop={W}:{cam_h},"
+            f"hqdn3d=3:3:4:4,gblur=sigma=1.4,unsharp=5:5:0.6[cam];"
             f"[c2]scale=-2:{H - cam_h},crop={W}:{H - cam_h}[game];{order}vstack[lv]"
         )
     fg_w = int(W * 1.3) // 2 * 2

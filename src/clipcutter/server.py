@@ -15,7 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from . import config, pipeline, tracker
+from . import analyze, config, pipeline, system, tracker, updater
 
 UI = Path(__file__).with_name("web.html")
 
@@ -26,6 +26,7 @@ class Jobs:
         self.items: dict[str, dict] = {}
         self.q: queue.Queue = queue.Queue()
         self.lock = threading.Lock()
+        self.save_lock = threading.Lock()
         self.path = Path(cfg["work_dir"]) / "jobs.json"
         self._load()
         threading.Thread(target=self._worker, daemon=True).start()
@@ -43,12 +44,13 @@ class Jobs:
             self.items[job["id"]] = job
 
     def save(self) -> None:
-        with self.lock:
-            data = sorted(self.items.values(), key=lambda j: -j["created"])[:50]
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, default=str))
-        tmp.replace(self.path)
+        with self.save_lock:   # worker + request threads both save; one temp file at a time
+            with self.lock:
+                data = sorted(self.items.values(), key=lambda j: -j["created"])[:50]
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, default=str))
+            tmp.replace(self.path)
 
     def add(self, kind: str, label: str, **params) -> dict:
         job = {"id": uuid.uuid4().hex[:8], "kind": kind, "label": label, "params": params,
@@ -78,6 +80,7 @@ class Jobs:
             pipeline.progress = lambda step, pct, j=job: j.update(step=step, pct=round(pct, 1))
             pipeline.on_source = lambda title, j=job: j.update(title=title)
             pipeline.cancelled = lambda j=job: bool(j.get("cancel"))
+            analyze.on_model_progress = lambda text, j=job: j.update(step=text)
             self.save()
             pipeline.log = lambda m, j=job: self._log(j, f"[{time.strftime('%H:%M:%S')}] {m}")
             try:
@@ -163,6 +166,9 @@ def make_handler(cfg: dict, jobs: Jobs):
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+            elif path == "/api/app":
+                self._json({"app": "clipcutter", "desktop": system.FROZEN, "ytdlp": updater.current_version(),
+                            "data_dir": str(Path.cwd())})
             elif path == "/api/state":
                 self._json({"jobs": jobs.public(), "clips": all_clips(cfg), "creators": tracker.summary(cfg)})
             elif path.startswith("/files/"):
@@ -181,6 +187,8 @@ def make_handler(cfg: dict, jobs: Jobs):
                     return self._json(jobs.add("run", url, url=url, clips=data.get("clips")))
                 if path.startswith("/api/jobs/") and path.endswith("/cancel"):
                     return self._json(jobs.cancel(path.split("/")[3]))
+                if path == "/api/update-downloader":
+                    return self._json(updater.update())
                 if path == "/api/track":
                     return self._json(jobs.add("track", "check all creators for new videos"))
                 if path == "/api/creators":
@@ -230,9 +238,13 @@ def make_handler(cfg: dict, jobs: Jobs):
     return H
 
 
-def serve(port: int = 8787, host: str = "127.0.0.1", cfg_path: str | None = None) -> None:
+def make_server(port: int = 8787, host: str = "127.0.0.1", cfg_path: str | None = None) -> ThreadingHTTPServer:
     cfg = config.load(cfg_path)
     jobs = Jobs(cfg)
-    srv = ThreadingHTTPServer((host, port), make_handler(cfg, jobs))
+    return ThreadingHTTPServer((host, port), make_handler(cfg, jobs))
+
+
+def serve(port: int = 8787, host: str = "127.0.0.1", cfg_path: str | None = None) -> None:
+    srv = make_server(port, host, cfg_path)
     print(f"ClipCutter running at http://localhost:{port}  (ctrl+c to stop)", flush=True)
     srv.serve_forever()

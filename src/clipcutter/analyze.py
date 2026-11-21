@@ -219,6 +219,7 @@ def transcribe_window(pcm: np.ndarray, start: float, end: float, model: str, lan
     if whisper_backend() == "mlx":
         import mlx_whisper
 
+        ensure_model(model)
         res = mlx_whisper.transcribe(audio, path_or_hf_repo=model, verbose=None, **common)
         for seg in res.get("segments", []):
             for w in seg.get("words", []):
@@ -250,6 +251,7 @@ def translate_window(pcm: np.ndarray, start: float, end: float) -> list[dict]:
     words = []
     if whisper_backend() == "mlx":
         import mlx_whisper
+        ensure_model(TRANSLATE_MODEL)
         res = mlx_whisper.transcribe(audio, path_or_hf_repo=TRANSLATE_MODEL, verbose=None, **common)
         for seg in res.get("segments", []):
             for w in seg.get("words", []):
@@ -265,6 +267,48 @@ def translate_window(pcm: np.ndarray, start: float, end: float) -> list[dict]:
 
 
 _FW = {}
+on_model_progress = None   # callable(text): the web app shows first-run model download progress
+_READY: set[str] = set()
+
+
+def ensure_model(repo: str) -> None:
+    """Download a speech model from Hugging Face once, reporting progress (it's ~0.5-1.6 GB)."""
+    if repo in _READY or "/" not in repo or Path(repo).exists():
+        return
+    import threading
+
+    from huggingface_hub import HfApi, snapshot_download
+    try:
+        snapshot_download(repo, local_files_only=True)
+        _READY.add(repo)
+        return
+    except Exception:
+        pass
+    say = on_model_progress or (lambda t: print(t, flush=True))
+    try:
+        total = sum(s.size or 0 for s in HfApi().model_info(repo, files_metadata=True).siblings or [])
+    except Exception:
+        total = 0
+    from huggingface_hub.constants import HF_HUB_CACHE
+    cache = Path(HF_HUB_CACHE) / ("models--" + repo.replace("/", "--"))
+    err: list = []
+    t = threading.Thread(target=lambda: _try(lambda: snapshot_download(repo), err), daemon=True)
+    t.start()
+    while t.is_alive():
+        got = sum(f.stat().st_size for f in cache.rglob("*") if f.is_file() and not f.is_symlink()) if cache.exists() else 0
+        pct = f"{min(99, 100 * got / total):.0f}% of {total / 1e9:.1f} GB" if total else f"{got / 1e6:.0f} MB"
+        say(f"Downloading the speech model (first time only): {pct}")
+        t.join(2)
+    if err:
+        raise err[0]
+    _READY.add(repo)
+
+
+def _try(fn, err: list) -> None:
+    try:
+        fn()
+    except BaseException as e:  # noqa: BLE001
+        err.append(e)
 
 
 def _faster_model(model: str):
@@ -273,6 +317,8 @@ def _faster_model(model: str):
 
     name = model.split("/")[-1].removeprefix("whisper-").removesuffix("-mlx")
     if name not in _FW:
+        from faster_whisper.utils import _MODELS
+        ensure_model(_MODELS.get(name, name))
         try:
             import ctranslate2
             cuda = ctranslate2.get_cuda_device_count() > 0

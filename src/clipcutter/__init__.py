@@ -13,6 +13,24 @@ def _common(sp: argparse.ArgumentParser) -> None:
     sp.add_argument("--llm", choices=["auto", "claude", "ollama", "templates"], help="who writes hooks/titles")
     sp.add_argument("--whisper", help="whisper model, e.g. mlx-community/whisper-base-mlx (faster)")
     sp.add_argument("--config", help="path to config.yaml")
+    sp.add_argument("--campaign", help="clipping-campaign preset (CTA, logo, caption rules): bobby, kreekcraft, luckylatvian")
+    sp.add_argument("--from", dest="win_from", help="only clip after this point, e.g. 100m, 1:40:00 or 6000 (seconds)")
+    sp.add_argument("--to", dest="win_to", help="only clip before this point (same formats as --from)")
+
+
+def _at(t: str | None) -> float | None:
+    """'100m' / '1:40:00' / '6000' -> seconds."""
+    if not t:
+        return None
+    t = t.strip().lower()
+    if t.endswith("m"):
+        return float(t[:-1]) * 60
+    if t.endswith("h"):
+        return float(t[:-1]) * 3600
+    sec = 0.0
+    for part in t.split(":"):
+        sec = sec * 60 + float(part)
+    return sec
 
 
 def _enable_hindi_text() -> None:
@@ -38,6 +56,10 @@ def main() -> None:
     r.add_argument("target", help="URL or path to a video file")
     r.add_argument("--chat", help="chat log file (optional)")
     _common(r)
+
+    rr = sub.add_parser("rerender", help="re-edit finished clips from cached video parts (no download)")
+    rr.add_argument("out_dir", help="output folder, e.g. output/youtube_abc123")
+    _common(rr)
 
     lv = sub.add_parser("live", help="clip a stream WHILE it's live (clips arrive a few minutes behind)")
     lv.add_argument("url", help="live stream link: twitch.tv/<channel>, youtube.com/watch?v=<live id>, kick.com/<channel>")
@@ -97,9 +119,17 @@ def main() -> None:
         cfg["llm"]["provider"] = args.llm
     if getattr(args, "whisper", None):
         cfg["whisper_model"] = args.whisper
+    if getattr(args, "campaign", None):
+        from . import campaigns
+        campaigns.apply(cfg, args.campaign)
+    if getattr(args, "win_from", None) or getattr(args, "win_to", None):
+        cfg["window"] = (_at(args.win_from), _at(args.win_to))
 
     try:
-        if args.cmd == "run":
+        if args.cmd == "rerender":
+            from . import pipeline
+            pipeline.rerender(args.out_dir, cfg)
+        elif args.cmd == "run":
             from . import pipeline
             pipeline.run(args.target, cfg, args.chat)
         elif args.cmd == "live":
@@ -217,9 +247,14 @@ def doctor() -> int:
         line(hasattr(cv2, "CascadeClassifier"), "facecam detection", f"opencv {cv2.__version__}", False)
     except ImportError:
         line(False, "facecam detection", "opencv missing: run `uv sync`", False)
+    from . import updater
+    line(updater.current_version() != "?", "downloader (yt-dlp)", updater.current_version())
     import os
+    if system.FROZEN:
+        line(True, "your files", str(system.user_data_dir()), False)
     key = bool(os.environ.get("ANTHROPIC_API_KEY"))
     line(key, "AI hooks (optional)", "ANTHROPIC_API_KEY set" if key else "not set: built-in Gen Z hook lines are used", False)
-    print("\n" + ("All required parts are installed. Run: uv run clipcutter serve" if ok
+    start = "Open the ClipCutter app." if system.FROZEN else "Run: uv run clipcutter serve"
+    print("\n" + (f"All required parts are installed. {start}" if ok
                   else "Fix the ❌ items above, then run this again."))
     return 0 if ok else 1
