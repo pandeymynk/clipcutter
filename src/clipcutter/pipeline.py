@@ -117,6 +117,12 @@ def run(target: str, cfg: dict, chat: str | None = None, out_sub: str = "") -> t
         "speech": score.speech_signal(all_words, T) if all_words else None,
     }
     base = score.combine(signals, w)
+    if cfg.get("window"):   # e.g. skip the "just chatting" start of a stream
+        lo, hi = cfg["window"]
+        lo = int(lo or 0); hi = int(hi) if hi else len(base)
+        base[:lo] = 0
+        base[hi:] = 0
+        log(f"window: only moments between {lo // 60}m and {hi // 60}m")
     n = cfg["clips"]
     cands = score.candidates(base, max(6, n * 3), gap=int(cfg["max_len"] * 0.6))
     log(f"score: {len(cands)} candidate moments")
@@ -198,6 +204,10 @@ def run(target: str, cfg: dict, chat: str | None = None, out_sub: str = "") -> t
             "signals": m.reasons, "transcript": transcript, **meta,
             "post_caption": f"{meta['description']} {' '.join(meta['hashtags'])}".strip(),
         }
+        if cfg.get("campaign"):   # the brief's exact caption text + hashtags
+            from . import campaigns
+            record["campaign"] = cfg["campaign"]
+            record["post_caption"] = campaigns.post_caption(cfg["campaign"], writer.censor(meta["hook"]))
         rec_path.write_text(json.dumps(record, indent=2, ensure_ascii=False))
         index.append(record)
         # update the list after EVERY clip so the dashboard shows clips as soon as they're ready
@@ -213,6 +223,42 @@ def run(target: str, cfg: dict, chat: str | None = None, out_sub: str = "") -> t
 def virality(s: float) -> int:
     """0-99 score shown to the user (like Opus Clip's), from our 0-1 moment score."""
     return int(max(1, min(99, round(99 * max(0.0, s) ** 0.6))))
+
+
+def rerender(out_dir: str, cfg: dict) -> None:
+    """Re-edit finished clips from the cached video sections (no network): new layout/campaign/captions.
+    Useful when the platform rate-limits (e.g. YouTube 'confirm you're not a bot')."""
+    out = Path(out_dir)
+    work = Path(cfg["work_dir"]) / out.name
+    vid = out.name.split("_", 1)[1].lower()
+    subs = sorted((f for f in (Path(cfg["work_dir"]) / "downloads").glob("*.json3") if vid in f.name.lower()),
+                  key=lambda f: "-orig" not in f.name)
+    words = ingest.caption_words(subs[0]) if subs else []
+    for rec_path in sorted(out.glob("clip_*.json")):
+        rec = json.loads(rec_path.read_text())
+        section = work / rec_path.stem / "section.mp4"
+        if not section.exists():
+            log(f"{rec_path.stem}: no cached section, skipped")
+            continue
+        start, end, peak = rec["start"], rec["end"], rec["peak"]
+        hook_start = max(start, peak - 1.0)
+        hook_dur = min(cfg["hook"]["seconds"], end - hook_start) if cfg["hook"]["enabled"] else 0.0
+        clip_words = [w for w in words if start <= w["s"] < end]
+        if not clip_words:
+            log(f"{rec_path.stem}: no caption words found, rendering without captions")
+        clip = {"start": start, "end": end, "peak": peak, "hook_start": hook_start, "hook_dur": hook_dur,
+                "words": clip_words, "hook": rec["hook"]}
+        a = max(0.0, min(start, hook_start) - 3)
+        shifted = _shift(clip, a)
+        mp4 = out / f"{rec_path.stem}.mp4"
+        render.render(shifted, analyze.probe(section), section, cfg, mp4, work / rec_path.stem)
+        rec["layout"] = shifted.get("layout")
+        if cfg.get("campaign"):
+            from . import campaigns
+            rec["campaign"] = cfg["campaign"]
+            rec["post_caption"] = campaigns.post_caption(cfg["campaign"], writer.censor(rec["hook"]))
+        rec_path.write_text(json.dumps(rec, indent=2, ensure_ascii=False))
+        log(f"{mp4.name} re-rendered ({rec['layout']})")
 
 
 def _shift(clip: dict, offset: float) -> dict:

@@ -35,7 +35,7 @@ frames, e.g. `ffmpeg -ss 3 -i output/<id>/clip_01.mp4 -frames:v 1 frame.png`.
 | `ingest.py` | yt-dlp downloads: full video (≤2 h) or audio-only (longer), platform captions (json3) → words |
 | `analyze.py` | loudness, scene cuts, chat log parsing, speech-to-text (mlx-whisper / faster-whisper) |
 | `score.py` | per-second signals → candidate moments → snap to sentence boundaries → pick N non-overlapping |
-| `writer.py` | hook, title, caption, hashtags: Claude API, Ollama, or built-in templates (English + Hinglish) |
+| `writer.py` | hook, title, caption, hashtags: Claude API, a free OpenAI-compatible key (NVIDIA/Groq/OpenRouter/Gemini, saved from the web app's "AI key" box into `ai-settings.json`), Ollama, or built-in templates (English + Hinglish) |
 | `render.py` | caption/hook overlay PNGs (Pillow, emoji + Hindi), ffmpeg filter graph, 9:16 layouts |
 | `facecam.py` | finds a webcam overlay so the clip can use the split layout |
 | `system.py` | **all OS differences**: fonts, video encoder, hw decoding, whisper backend, JS runtime |
@@ -49,7 +49,22 @@ frames, e.g. `ffmpeg -ss 3 -i output/<id>/clip_01.mp4 -frames:v 1 frame.png`.
 | `site/static/index.html` | landing page + app (single file, vanilla JS), PWA files next to it |
 | `live.py` | **live mode**: ffmpeg records HLS in N-min segments, Twitch IRC / YouTube live-chat capture, per-segment clipping |
 | `translit.py` | Devanagari Hindi -> Roman Hinglish for captions |
+| `campaigns.py` | clipping-campaign presets (`--campaign`): on-screen label, CTA end card, logo overlay, censored captions, exact post caption. See docs/CAMPAIGNS.md |
 | `config.py` | defaults; users override with `config.yaml` (see `config.example.yaml`) |
+| `desktop.py` | **desktop app** launcher: chdir to the per-user data folder, start the web app, open the browser, small Tk window |
+| `updater.py` | desktop app: downloads a newer yt-dlp wheel from PyPI into the data folder; `activate()` puts it before the bundled one |
+
+## Desktop app (one-click install)
+
+```bash
+packaging/build_mac.sh                                         # -> dist/ClipCutter-<ver>-mac-<arch>.dmg
+powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1   # -> dist\ClipCutter-<ver>-windows-x64-setup.exe
+```
+PyInstaller (`packaging/clipcutter.spec`) bundles Python + deps; `packaging/fetch_vendor.py` downloads static ffmpeg/ffprobe,
+deno, libfribidi and Noto fonts into `packaging/vendor/`. Two executables share one folder: `ClipCutter` (windowed:
+`packaging/app_entry.py`, no args = desktop launcher) and `clipcutter-cli` (console, same CLI as `uv run clipcutter`).
+CI: `.github/workflows/desktop.yml` builds mac arm64 and Windows (no Intel Mac: onnxruntime has no macOS x86_64 wheels), smoke-tests (`doctor` + `packaging/smoke_test.py`),
+and a `v*` tag makes a **draft** release. User guide: [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Website (multi-user)
 
@@ -99,7 +114,23 @@ Key rule: the website never downloads a whole video. It analyses text, then down
 - **Live chat:** YouTube gift items (`giftMessageViewModel`) have no timestamp; they take the previous message's
   wall time. In live mode chat is mapped by wall-clock (`wall0`), never by the stream's own offsets.
 - **Live quality gate:** `score.recommended` decides; weak moments are skipped before rendering (saves CPU + credits).
-- **Never block the pipeline on the LLM.** Any writer error falls back to templates (once per run).
+- **Campaign clips:** skip the just-chatting part of a stream with `--from`/`--to` (loudness alone picks intros/watch-alongs), and check frames before posting: briefs reject non-gameplay, misleading hooks and low quality.
+- **Never block the pipeline on the LLM.** Any writer error falls back to the next provider, then templates (once per run).
+- **Free model names change.** NVIDIA retired `meta/llama-3.3-70b-instruct` in Aug 2026. `writer.pick_model` asks the
+  service's `/models` list when a key is saved; don't hard-code one model as the only choice.
+- **Desktop bundle paths:** in the app, `system.FROZEN` is true and `system.BUNDLE` is `sys._MEIPASS`. `system.prepare_bundle()`
+  puts `BUNDLE/bin` (ffmpeg, ffprobe, deno) first on PATH, so plain `"ffmpeg"` calls work; read-only files come from
+  `system.resource_dir()` / `system.assets_dir()` (never `Path(__file__).parents[…]`, which points outside the bundle).
+  User data goes in `system.user_data_dir()` (`~/Library/Application Support/ClipCutter`, `%APPDATA%\ClipCutter`).
+- **Pillow loads libfribidi by bare name** (`libfribidi.dylib` on mac, `fribidi*.dll` on Windows). The mac app re-execs once
+  with `DYLD_FALLBACK_LIBRARY_PATH=BUNDLE/lib` (dyld reads it only at start); Windows puts `BUNDLE/lib` on PATH.
+- **mlx in PyInstaller:** `core.so` loads the top-level `libmlx.dylib`, which needs `mlx.metallib` next to it, else the app
+  dies with SIGTRAP on `import mlx`. The spec moves the metallib to the bundle root.
+- **Never import yt_dlp twice in one process** (e.g. import, delete from `sys.modules`, import again): its requests handler
+  patches urllib3 on import, and a second patch breaks every download ("Urllib3PercentREOverride has no attribute sub").
+  `updater.activate()` reads the bundled version from `yt_dlp_version.txt` for that reason.
+- **Windowed Windows app:** no console, so `prepare_bundle()` hides ffmpeg console windows (CREATE_NO_WINDOW) and stdout
+  goes to `<data>/logs/clipcutter.log`. Output is forced to UTF-8 (✅ and Hindi crash cp1252 pipes).
 - **OS-specific code goes in `system.py` only.** Don't hard-code `/System/Library/...` or `videotoolbox` anywhere else.
 
 ## Conventions

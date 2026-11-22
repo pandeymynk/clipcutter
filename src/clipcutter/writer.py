@@ -3,8 +3,10 @@
 Providers (config llm.provider):
   claude    - Anthropic API (best quality; needs ANTHROPIC_API_KEY or `ant auth login`)
   ollama    - local model via Ollama (free, offline)
+  openai    - any OpenAI-compatible API with a key: NVIDIA, Groq, OpenRouter, Gemini (all have free keys).
+              Set from the web app's "AI key" box (saved in ai-settings.json) or config llm.api_base/api_key.
   templates - built-in Gen Z lines, no AI at all (free, instant)
-  auto      - claude if credentials exist, else ollama if running, else templates
+  auto      - claude if credentials exist, else a saved AI key, else ollama if running, else templates
 """
 from __future__ import annotations
 
@@ -199,6 +201,71 @@ def _has_claude_creds() -> bool:
     return bool(os.environ.get("ANTHROPIC_API_KEY")) or (Path.home() / ".config" / "anthropic").exists()
 
 
+# Free-key services that speak the OpenAI chat API. Model names change; users can override `model`.
+AI_SERVICES: dict[str, dict] = {
+    "nvidia": {"name": "NVIDIA (build.nvidia.com)", "base": "https://integrate.api.nvidia.com/v1",
+               "model": "google/gemma-4-31b-it", "keys": "https://build.nvidia.com/settings/api-keys",
+               "prefer": ["gemma-4-31b-it", "mistral-large", "nemotron-3.5-lightning", "glm-5", "minimax", "gemma"]},
+    "groq": {"name": "Groq", "base": "https://api.groq.com/openai/v1",
+             "model": "llama-3.3-70b-versatile", "keys": "https://console.groq.com/keys",
+             "prefer": ["gpt-oss-120b", "llama-4", "70b", "qwen", "gpt-oss", "gemma", "llama"]},
+    "openrouter": {"name": "OpenRouter (free models)", "base": "https://openrouter.ai/api/v1",
+                   "model": "google/gemma-4-31b-it:free", "keys": "https://openrouter.ai/settings/keys",
+                   "prefer": ["gemma-4-31b-it:free", "nemotron-3.5-lightning:free", "gemma-4", ":free"]},
+    "gemini": {"name": "Google Gemini", "base": "https://generativelanguage.googleapis.com/v1beta/openai",
+               "model": "gemini-2.5-flash", "keys": "https://aistudio.google.com/apikey",
+               "prefer": ["gemini-3-flash", "gemini-2.5-flash", "flash"]},
+}
+# never pick these for writing hooks
+_NOT_CHAT = re.compile(r"embed|guard|safety|retriev|clip|detector|whisper|tts|speech|coder|translate|pii|"
+                       r"calibration|reason|thinking|image|audio|rerank|moderation|-vl|vision|preview|lite", re.I)
+
+
+def pick_model(service: str, base: str, key: str) -> str:
+    """Ask the service which models exist now and pick a good chat model (free model names change often)."""
+    svc = AI_SERVICES[service]
+    try:
+        req = urllib.request.Request(base.rstrip("/") + "/models", headers={
+            "Authorization": f"Bearer {key}", "User-Agent": "clipcutter"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            ids = [str(m.get("id", "")).removeprefix("models/") for m in json.loads(r.read()).get("data", [])]
+    except Exception:
+        return svc["model"]
+    chat = [i for i in ids if i and not _NOT_CHAT.search(i)]
+    if service == "openrouter":
+        chat = [i for i in chat if i.endswith(":free")]
+    for want in svc["prefer"]:
+        hit = next((i for i in chat if want in i), None)
+        if hit:
+            return hit
+    return svc["model"] if svc["model"] in ids or not chat else chat[0]
+
+
+def _has_key(llm: dict) -> bool:
+    return bool(llm.get("api_key") and llm.get("api_base"))
+
+
+def _openai(prompt: str, system: str, llm: dict, timeout: float = 60) -> dict | None:
+    """Chat completion on an OpenAI-compatible endpoint (NVIDIA NIM, Groq, OpenRouter, Gemini…)."""
+    body = json.dumps({"model": llm["api_model"], "temperature": 0.9, "max_tokens": 700,
+                       "messages": [{"role": "system", "content": system},
+                                    {"role": "user", "content": prompt}]}).encode()
+    req = urllib.request.Request(llm["api_base"].rstrip("/") + "/chat/completions", data=body, headers={
+        "Content-Type": "application/json", "Authorization": f"Bearer {llm['api_key']}",
+        "User-Agent": "clipcutter"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        msg = json.loads(r.read())["choices"][0]["message"]
+    return _json(msg.get("content") or "")
+
+
+def test_key(llm: dict) -> str:
+    """One tiny request to check a saved key works. Returns a short human message; raises on failure."""
+    data = _openai('Return ONLY this JSON: {"hooks": ["key works"], "best": 0}', "You return JSON only.", llm, 30)
+    if not data or not data.get("hooks"):
+        raise ValueError("the service answered, but not with usable text; try another model")
+    return "Key works ✓"
+
+
 def _ollama_up() -> bool:
     try:
         urllib.request.urlopen("http://localhost:11434/api/tags", timeout=0.5)
@@ -318,22 +385,32 @@ def write(transcript: str, chat: list[str], cfg: dict, seed: int, title: str = "
     style = cfg["style"]
     llm = cfg["llm"]
     provider = llm["provider"]
-    if provider == "auto":
-        provider = "claude" if _has_claude_creds() else ("ollama" if _ollama_up() else "templates")
-    if provider in _FAILED:
-        provider = "templates"
+    if provider == "auto":   # a key saved in the app is the user's explicit choice, so it goes first
+        chain = [p for p, ok in (("openai", _has_key(llm)), ("claude", _has_claude_creds()),
+                                 ("ollama", _ollama_up())) if ok]
+    else:
+        chain = [provider]
+    chain = [p for p in chain if p not in _FAILED and p != "templates"]
 
     system = "You write viral short-form video hooks and captions for gaming clips. " + STYLE_GUIDE[style]
     data = None
-    used = provider
-    try:
-        if provider == "claude":
-            data = _claude(_prompt(transcript, chat, title), system, llm["model"])
-        elif provider == "ollama":
-            data = _ollama(_prompt(transcript, chat, title), system, llm["ollama_model"])
-    except Exception as e:  # network down, no credits, etc. -> never block the pipeline
-        print(f"   ! {provider} failed ({type(e).__name__}: {e}); using templates for the rest of this run")
-        _FAILED.add(provider)
+    used = "templates"
+    prompt = _prompt(transcript, chat, title)
+    for p in chain:
+        try:
+            if p == "claude":
+                data = _claude(prompt, system, llm["model"])
+            elif p == "openai" and _has_key(llm):
+                data = _openai(prompt, system, llm)
+            elif p == "ollama":
+                data = _ollama(prompt, system, llm["ollama_model"])
+        except Exception as e:  # network down, no credits, bad key… -> never block the pipeline
+            print(f"   ! {p} failed ({type(e).__name__}: {e}); not using it again this run")
+            _FAILED.add(p)
+            data = None
+        if data and data.get("hooks"):
+            used = p
+            break
     if not data or not data.get("hooks"):
         data = _templates(transcript, chat, seed, title, avoid)
         used = "templates"
@@ -349,5 +426,5 @@ def write(transcript: str, chat: list[str], cfg: dict, seed: int, title: str = "
         "title": _clean(str(data.get("title", hook)), style),
         "description": _clean(str(data.get("description", "")), style),
         "hashtags": tags[:10],
-        "writer": used,
+        "writer": llm.get("api_service", "openai") if used == "openai" else used,
     }

@@ -52,6 +52,15 @@ nav .n{display:inline-block;min-width:18px;padding:0 5px;margin-left:6px;border-
 .btn.sm{padding:7px 12px;font-size:13px;border-radius:9px}
 .chips{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:14px;color:var(--dim);font-size:12px}
 .chips span{border:1px solid var(--line);border-radius:99px;padding:3px 10px}
+.aikey{max-width:620px;margin:28px auto 0}
+.aikey h3{margin:0 0 4px;font-size:16px}.aikey .sub{color:var(--dim);font-size:13px;margin-bottom:12px}
+.aikey .row{display:grid;grid-template-columns:1fr 1.4fr;gap:10px;margin-bottom:10px}
+.aikey select,.aikey input{background:var(--bg);border:1px solid var(--line2);color:var(--txt);border-radius:12px;padding:11px 13px;outline:0;min-width:0;font:inherit}
+.aikey input:focus,.aikey select:focus{border-color:var(--acc)}
+.aikey .acts{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.aikey a{color:var(--acc)}.aikey .ok{color:var(--good,#3ddc84)}.aikey .bad{color:var(--bad)}
+@media (max-width:640px){.aikey .row{grid-template-columns:1fr}}
+.appfoot{display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap;margin:40px 0 24px;color:var(--dim);font-size:12px}
 .err{color:var(--bad);text-align:center;margin-top:10px;min-height:20px}
 
 .live{max-width:780px;margin:12px auto 0}
@@ -168,7 +177,7 @@ pre{margin:8px 0 0;max-height:160px;overflow:auto;background:var(--bg);border-ra
         </select>
         <button class="btn" id="go">Make clips ⚡</button>
       </form>
-      <div class="chips"><span>YouTube</span><span>Twitch</span><span>Kick</span><span>Hindi + English</span><span>runs on your Mac, free</span></div>
+      <div class="chips"><span>YouTube</span><span>Twitch</span><span>Kick</span><span>Hindi + English</span><span>runs on your computer, free</span></div>
       <div class="err" id="runMsg"></div>
     </div>
     <div class="live" id="live"></div>
@@ -201,6 +210,25 @@ pre{margin:8px 0 0;max-height:160px;overflow:auto;background:var(--bg);border-ra
     <div class="err" id="addMsg"></div>
     <div class="crs" id="creators"></div>
   </section>
+  <section class="card aikey" id="aiCard">
+    <h3>🔑 AI key <span style="color:var(--dim);font-weight:400">(optional, free)</span></h3>
+    <div class="sub">Without a key, ClipCutter writes hooks with its built-in lines. With a free key, an AI writes them for each clip.
+      <span id="aiNow"></span></div>
+    <div class="row">
+      <select id="aiSvc"></select>
+      <input id="aiKey" type="password" placeholder="Paste your key here" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="acts">
+      <button class="btn sm" id="aiSave">Test &amp; save</button>
+      <a id="aiGet" target="_blank" rel="noopener">Get a free key →</a>
+      <button class="btn ghost sm" id="aiDel" style="display:none">Remove key</button>
+      <input id="aiModel" placeholder="model (optional)" style="flex:1;min-width:160px;padding:7px 10px;font-size:13px">
+    </div>
+    <div id="aiMsg" style="margin-top:10px;font-size:13px;min-height:18px"></div>
+  </section>
+  <div class="appfoot"><span id="appVer"></span>
+    <button class="btn ghost sm" id="updDl" title="Sites like YouTube change often. If downloads fail, update the downloader.">↻ Update downloader</button>
+    <span id="updMsg"></span></div>
 </main>
 <div class="toast" id="toast"></div>
 
@@ -345,6 +373,35 @@ function render(){
 async function refresh(){ try { state = await (await fetch("/api/state")).json(); render(); } catch(e) {} }
 async function loop(){ await refresh(); setTimeout(loop, busy ? 1000 : 3000); }
 loop();
+fetch("/api/app").then(r => r.json()).then(a => { $("#appVer").textContent = `downloader yt-dlp ${a.ytdlp}`; }).catch(() => {});
+let aiInfo = null;
+async function loadAi(){
+  try { aiInfo = await (await fetch("/api/ai")).json(); } catch(e) { return; }
+  const sel = $("#aiSvc"), cur = aiInfo.current;
+  sel.innerHTML = Object.entries(aiInfo.services).map(([k, v]) => `<option value="${k}">${esc(v.name)}</option>`).join("");
+  if (cur.service) sel.value = cur.service;
+  $("#aiNow").innerHTML = cur.key ? `<br><b class="ok">Using ${esc(aiInfo.services[cur.service]?.name || cur.service)}</b> · key ${esc(cur.key)} · ${esc(cur.model || "")}` : "";
+  $("#aiDel").style.display = cur.key ? "" : "none";
+  aiSvcChanged();
+}
+function aiSvcChanged(){ const s = aiInfo.services[$("#aiSvc").value]; $("#aiGet").href = s.keys; $("#aiModel").placeholder = "model (optional, picked for you)"; }
+$("#aiSvc").onchange = aiSvcChanged;
+$("#aiSave").onclick = async () => {
+  const b = $("#aiSave"), m = $("#aiMsg"); b.disabled = true; m.className = ""; m.textContent = "Testing the key…";
+  try { const r = await post("/api/ai", {service: $("#aiSvc").value, key: $("#aiKey").value, model: $("#aiModel").value});
+        m.className = "ok"; m.textContent = r.msg; $("#aiKey").value = ""; loadAi(); }
+  catch(e) { m.className = "bad"; m.textContent = e.message; }
+  b.disabled = false;
+};
+$("#aiDel").onclick = async () => { if (!confirm("Remove the saved AI key?")) return;
+  const r = await post("/api/ai", {}); $("#aiMsg").className = ""; $("#aiMsg").textContent = r.msg; loadAi(); };
+loadAi();
+$("#updDl").onclick = async () => {
+  const b = $("#updDl"); b.disabled = true; $("#updMsg").textContent = "checking…";
+  try { const r = await post("/api/update-downloader", {}); $("#updMsg").textContent = r.msg || r.error || ""; }
+  catch(e) { $("#updMsg").textContent = "couldn't check, try again"; }
+  b.disabled = false;
+};
 </script>
 </body>
 </html>

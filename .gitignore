@@ -8,3 +8,10 @@ __pycache__/
 .env
 .DS_Store
 data/
+
+# desktop app builds
+/build/
+/dist/
+packaging/vendor/
+packaging/build/
+ai-settings.json

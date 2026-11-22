@@ -15,7 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from . import config, pipeline, tracker
+from . import analyze, config, pipeline, system, tracker, updater, writer
 
 UI = Path(__file__).with_name("web.html")
 
@@ -26,6 +26,7 @@ class Jobs:
         self.items: dict[str, dict] = {}
         self.q: queue.Queue = queue.Queue()
         self.lock = threading.Lock()
+        self.save_lock = threading.Lock()
         self.path = Path(cfg["work_dir"]) / "jobs.json"
         self._load()
         threading.Thread(target=self._worker, daemon=True).start()
@@ -43,12 +44,13 @@ class Jobs:
             self.items[job["id"]] = job
 
     def save(self) -> None:
-        with self.lock:
-            data = sorted(self.items.values(), key=lambda j: -j["created"])[:50]
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, default=str))
-        tmp.replace(self.path)
+        with self.save_lock:   # worker + request threads both save; one temp file at a time
+            with self.lock:
+                data = sorted(self.items.values(), key=lambda j: -j["created"])[:50]
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, default=str))
+            tmp.replace(self.path)
 
     def add(self, kind: str, label: str, **params) -> dict:
         job = {"id": uuid.uuid4().hex[:8], "kind": kind, "label": label, "params": params,
@@ -78,6 +80,7 @@ class Jobs:
             pipeline.progress = lambda step, pct, j=job: j.update(step=step, pct=round(pct, 1))
             pipeline.on_source = lambda title, j=job: j.update(title=title)
             pipeline.cancelled = lambda j=job: bool(j.get("cancel"))
+            analyze.on_model_progress = lambda text, j=job: j.update(step=text)
             self.save()
             pipeline.log = lambda m, j=job: self._log(j, f"[{time.strftime('%H:%M:%S')}] {m}")
             try:
@@ -163,6 +166,16 @@ def make_handler(cfg: dict, jobs: Jobs):
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+            elif path == "/api/app":
+                self._json({"app": "clipcutter", "desktop": system.FROZEN, "ytdlp": updater.current_version(),
+                            "data_dir": str(Path.cwd())})
+            elif path == "/api/ai":
+                ai = config.load_ai()
+                k = ai.get("api_key", "")
+                self._json({"services": {n: {"name": s["name"], "keys": s["keys"], "model": s["model"]}
+                                         for n, s in writer.AI_SERVICES.items()},
+                            "current": {"service": ai.get("service"), "model": ai.get("api_model"),
+                                        "key": (k[:4] + "…" + k[-4:]) if len(k) > 12 else ("set" if k else "")}})
             elif path == "/api/state":
                 self._json({"jobs": jobs.public(), "clips": all_clips(cfg), "creators": tracker.summary(cfg)})
             elif path.startswith("/files/"):
@@ -181,6 +194,35 @@ def make_handler(cfg: dict, jobs: Jobs):
                     return self._json(jobs.add("run", url, url=url, clips=data.get("clips")))
                 if path.startswith("/api/jobs/") and path.endswith("/cancel"):
                     return self._json(jobs.cancel(path.split("/")[3]))
+                if path == "/api/ai":
+                    service, key = data.get("service"), (data.get("key") or "").strip()
+                    if not service:   # remove the key
+                        config.save_ai(None, None)
+                        msg = "AI key removed. Built-in hooks will be used."
+                    else:
+                        if service not in writer.AI_SERVICES or len(key) < 10:
+                            return self._json({"error": "pick a service and paste the whole key"}, 400)
+                        svc = writer.AI_SERVICES[service]
+                        trial = {"api_base": svc["base"], "api_key": key,
+                                 "api_model": (data.get("model") or "").strip()
+                                 or writer.pick_model(service, svc["base"], key)}
+                        try:
+                            writer.test_key(trial)
+                        except Exception as e:  # noqa: BLE001
+                            reason = getattr(e, "code", None)
+                            hint = {401: "the key is wrong or expired", 403: "the key is wrong, or it has no access to this model",
+                                    404: "model not found, try another model name", 410: "that model was retired, leave the model box empty",
+                                    429: "free limit reached, try again later"}.get(reason, str(e)[:160])
+                            return self._json({"error": f"Key didn't work: {hint}"}, 400)
+                        config.save_ai(service, key, trial["api_model"])
+                        msg = f"Saved ✓ Hooks will now be written by {svc['name']} ({trial['api_model']})."
+                    for k in ("api_base", "api_key", "api_model", "api_service"):
+                        cfg["llm"].pop(k, None)
+                    config.apply_ai(cfg)
+                    writer._FAILED.discard("openai")
+                    return self._json({"ok": True, "msg": msg})
+                if path == "/api/update-downloader":
+                    return self._json(updater.update())
                 if path == "/api/track":
                     return self._json(jobs.add("track", "check all creators for new videos"))
                 if path == "/api/creators":
@@ -230,9 +272,13 @@ def make_handler(cfg: dict, jobs: Jobs):
     return H
 
 
-def serve(port: int = 8787, host: str = "127.0.0.1", cfg_path: str | None = None) -> None:
+def make_server(port: int = 8787, host: str = "127.0.0.1", cfg_path: str | None = None) -> ThreadingHTTPServer:
     cfg = config.load(cfg_path)
     jobs = Jobs(cfg)
-    srv = ThreadingHTTPServer((host, port), make_handler(cfg, jobs))
+    return ThreadingHTTPServer((host, port), make_handler(cfg, jobs))
+
+
+def serve(port: int = 8787, host: str = "127.0.0.1", cfg_path: str | None = None) -> None:
+    srv = make_server(port, host, cfg_path)
     print(f"ClipCutter running at http://localhost:{port}  (ctrl+c to stop)", flush=True)
     srv.serve_forever()
