@@ -47,7 +47,23 @@ def _enable_hindi_text() -> None:
     os.execve(sys.executable, [sys.executable] + sys.argv, env)
 
 
+def _windows_utf8() -> None:
+    """Windows opens files as cp1252 by default, and clip JSON/captions hold emoji and Hindi.
+    Run once more in Python's UTF-8 mode (the desktop app sets it at build time)."""
+    import os
+    import subprocess
+    if not sys.platform.startswith("win") or sys.flags.utf8_mode or getattr(sys, "frozen", False):
+        return
+    env = dict(os.environ, PYTHONUTF8="1")
+    code = "import sys, clipcutter; sys.argv[0] = 'clipcutter'; clipcutter.main()"
+    try:
+        sys.exit(subprocess.run([sys.executable, "-X", "utf8", "-c", code, *sys.argv[1:]], env=env).returncode)
+    except KeyboardInterrupt:
+        sys.exit(130)
+
+
 def main() -> None:
+    _windows_utf8()
     _enable_hindi_text()
     p = argparse.ArgumentParser(prog="clipcutter", description="Turn streams into ready-to-post clips.")
     sub = p.add_subparsers(dest="cmd", required=True)

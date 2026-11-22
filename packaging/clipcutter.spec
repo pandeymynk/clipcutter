@@ -73,8 +73,10 @@ pyz = PYZ(a.pure)
 cli_pyz = PYZ(cli.pure)
 
 icon = str(HERE / "build" / ("icon.icns" if IS_MAC else "icon.ico"))
+# UTF-8 mode: Windows defaults files to cp1252, and clip JSON/captions contain emoji and Hindi
+UTF8 = [("X utf8_mode=1", None, "OPTION")]
 app_exe = EXE(
-    pyz, a.scripts, [],
+    pyz, a.scripts, UTF8,
     exclude_binaries=True,
     name="ClipCutter",
     console=False,            # no terminal window; logs go to <data folder>/logs/clipcutter.log
@@ -84,7 +86,7 @@ app_exe = EXE(
     entitlements_file=None,
 )
 cli_exe = EXE(
-    cli_pyz, cli.scripts, [],
+    cli_pyz, cli.scripts, UTF8,
     exclude_binaries=True,
     name="clipcutter-cli",
     console=True,             # for `clipcutter-cli doctor` etc. and the CI smoke test
