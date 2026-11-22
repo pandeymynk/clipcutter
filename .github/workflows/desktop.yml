@@ -44,8 +44,8 @@ jobs:
           python3 packaging/smoke_test.py "$CLI"
           # the double-click path: windowed app starts the web server
           CLIPCUTTER_NO_BROWSER=1 "$RUNNER_TEMP/ClipCutter.app/Contents/MacOS/ClipCutter" &
-          for i in $(seq 1 60); do curl -sf localhost:8787/api/app && break; sleep 2; done
-          curl -sf localhost:8787/api/app | grep -q '"desktop": true'
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:8787/api/app && break; sleep 2; done
+          curl -sf http://127.0.0.1:8787/api/app | grep -q '"desktop": true'
           kill %1 || true
       - uses: actions/upload-artifact@v4
         with:
@@ -84,7 +84,7 @@ jobs:
           $p = Start-Process "$env:LOCALAPPDATA\Programs\ClipCutter\ClipCutter.exe" -PassThru
           $ok = $false
           foreach ($i in 1..60) {
-            try { $r = Invoke-RestMethod http://localhost:8787/api/app -TimeoutSec 2; if ($r.desktop) { $ok = $true; break } } catch {}
+            try { $r = Invoke-RestMethod http://127.0.0.1:8787/api/app -TimeoutSec 2; if ($r.desktop) { $ok = $true; break } } catch {}
             Start-Sleep 2
           }
           Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
