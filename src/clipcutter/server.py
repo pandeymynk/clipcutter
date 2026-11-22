@@ -15,7 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from . import analyze, config, pipeline, system, tracker, updater
+from . import analyze, config, pipeline, system, tracker, updater, writer
 
 UI = Path(__file__).with_name("web.html")
 
@@ -169,6 +169,13 @@ def make_handler(cfg: dict, jobs: Jobs):
             elif path == "/api/app":
                 self._json({"app": "clipcutter", "desktop": system.FROZEN, "ytdlp": updater.current_version(),
                             "data_dir": str(Path.cwd())})
+            elif path == "/api/ai":
+                ai = config.load_ai()
+                k = ai.get("api_key", "")
+                self._json({"services": {n: {"name": s["name"], "keys": s["keys"], "model": s["model"]}
+                                         for n, s in writer.AI_SERVICES.items()},
+                            "current": {"service": ai.get("service"), "model": ai.get("api_model"),
+                                        "key": (k[:4] + "…" + k[-4:]) if len(k) > 12 else ("set" if k else "")}})
             elif path == "/api/state":
                 self._json({"jobs": jobs.public(), "clips": all_clips(cfg), "creators": tracker.summary(cfg)})
             elif path.startswith("/files/"):
@@ -187,6 +194,33 @@ def make_handler(cfg: dict, jobs: Jobs):
                     return self._json(jobs.add("run", url, url=url, clips=data.get("clips")))
                 if path.startswith("/api/jobs/") and path.endswith("/cancel"):
                     return self._json(jobs.cancel(path.split("/")[3]))
+                if path == "/api/ai":
+                    service, key = data.get("service"), (data.get("key") or "").strip()
+                    if not service:   # remove the key
+                        config.save_ai(None, None)
+                        msg = "AI key removed. Built-in hooks will be used."
+                    else:
+                        if service not in writer.AI_SERVICES or len(key) < 10:
+                            return self._json({"error": "pick a service and paste the whole key"}, 400)
+                        svc = writer.AI_SERVICES[service]
+                        trial = {"api_base": svc["base"], "api_key": key,
+                                 "api_model": (data.get("model") or "").strip()
+                                 or writer.pick_model(service, svc["base"], key)}
+                        try:
+                            writer.test_key(trial)
+                        except Exception as e:  # noqa: BLE001
+                            reason = getattr(e, "code", None)
+                            hint = {401: "the key is wrong or expired", 403: "the key is wrong, or it has no access to this model",
+                                    404: "model not found, try another model name", 410: "that model was retired, leave the model box empty",
+                                    429: "free limit reached, try again later"}.get(reason, str(e)[:160])
+                            return self._json({"error": f"Key didn't work: {hint}"}, 400)
+                        config.save_ai(service, key, trial["api_model"])
+                        msg = f"Saved ✓ Hooks will now be written by {svc['name']} ({trial['api_model']})."
+                    for k in ("api_base", "api_key", "api_model", "api_service"):
+                        cfg["llm"].pop(k, None)
+                    config.apply_ai(cfg)
+                    writer._FAILED.discard("openai")
+                    return self._json({"ok": True, "msg": msg})
                 if path == "/api/update-downloader":
                     return self._json(updater.update())
                 if path == "/api/track":

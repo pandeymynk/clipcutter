@@ -35,7 +35,7 @@ frames, e.g. `ffmpeg -ss 3 -i output/<id>/clip_01.mp4 -frames:v 1 frame.png`.
 | `ingest.py` | yt-dlp downloads: full video (≤2 h) or audio-only (longer), platform captions (json3) → words |
 | `analyze.py` | loudness, scene cuts, chat log parsing, speech-to-text (mlx-whisper / faster-whisper) |
 | `score.py` | per-second signals → candidate moments → snap to sentence boundaries → pick N non-overlapping |
-| `writer.py` | hook, title, caption, hashtags: Claude API, Ollama, or built-in templates (English + Hinglish) |
+| `writer.py` | hook, title, caption, hashtags: Claude API, a free OpenAI-compatible key (NVIDIA/Groq/OpenRouter/Gemini, saved from the web app's "AI key" box into `ai-settings.json`), Ollama, or built-in templates (English + Hinglish) |
 | `render.py` | caption/hook overlay PNGs (Pillow, emoji + Hindi), ffmpeg filter graph, 9:16 layouts |
 | `facecam.py` | finds a webcam overlay so the clip can use the split layout |
 | `system.py` | **all OS differences**: fonts, video encoder, hw decoding, whisper backend, JS runtime |
@@ -115,7 +115,9 @@ Key rule: the website never downloads a whole video. It analyses text, then down
   wall time. In live mode chat is mapped by wall-clock (`wall0`), never by the stream's own offsets.
 - **Live quality gate:** `score.recommended` decides; weak moments are skipped before rendering (saves CPU + credits).
 - **Campaign clips:** skip the just-chatting part of a stream with `--from`/`--to` (loudness alone picks intros/watch-alongs), and check frames before posting: briefs reject non-gameplay, misleading hooks and low quality.
-- **Never block the pipeline on the LLM.** Any writer error falls back to templates (once per run).
+- **Never block the pipeline on the LLM.** Any writer error falls back to the next provider, then templates (once per run).
+- **Free model names change.** NVIDIA retired `meta/llama-3.3-70b-instruct` in Aug 2026. `writer.pick_model` asks the
+  service's `/models` list when a key is saved; don't hard-code one model as the only choice.
 - **Desktop bundle paths:** in the app, `system.FROZEN` is true and `system.BUNDLE` is `sys._MEIPASS`. `system.prepare_bundle()`
   puts `BUNDLE/bin` (ffmpeg, ffprobe, deno) first on PATH, so plain `"ffmpeg"` calls work; read-only files come from
   `system.resource_dir()` / `system.assets_dir()` (never `Path(__file__).parents[…]`, which points outside the bundle).

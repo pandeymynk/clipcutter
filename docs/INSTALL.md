@@ -73,8 +73,19 @@ Nobody can promise every link works every day.
 
 Copy `config.example.yaml` from the [repo](https://github.com/pandeymynk/clipcutter/blob/main/config.example.yaml) to
 your ClipCutter folder (paths above, one level up from `output`) as `config.yaml` and change what you want.
-Hooks and titles use built-in Gen Z lines. AI-written hooks are optional and need an Anthropic account signed in with
-`ant auth login` on this computer.
+
+### Free AI key (optional)
+
+Without a key, hooks and titles come from ClipCutter's built-in Gen Z lines. That's free and works offline. For an AI
+writing hooks for each clip, add a **free** key:
+
+1. Scroll to the **🔑 AI key** box at the bottom of the ClipCutter page.
+2. Pick a service. **NVIDIA** (build.nvidia.com), **Groq**, **OpenRouter** and **Google Gemini** all have free keys.
+3. Click **Get a free key →**, sign in there, create a key and copy it.
+4. Paste it in the box and press **Test & save**. ClipCutter checks the key and picks a good model by itself.
+
+The key stays on your computer (`ai-settings.json` in your ClipCutter folder). Never share it or show it in a video.
+Free keys have rate limits. If a key stops working, ClipCutter falls back to built-in hooks, so clips still get made.
 
 ## Something's wrong?
 

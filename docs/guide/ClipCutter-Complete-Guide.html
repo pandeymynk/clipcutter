@@ -284,6 +284,13 @@ uv run clipcutter run "C:\Videos\stream.mp4" --clips 3</pre>
     <tr><td><code>uv run clipcutter live URL</code></td><td>Clip a stream <b>while it is live</b>; clips arrive a few minutes behind. Best for being first to post.</td></tr>
     <tr><td><code>uv run clipcutter rerender output/&lt;id&gt;</code></td><td>Re-make clips after changing settings, without downloading again.</td></tr>
   </table>
+  <h3>Free AI key (optional)</h3>
+  <p>Hooks work without any key (built-in lines). For AI-written hooks, use the <b>🔑 AI key</b> box at the bottom of the
+    ClipCutter page: pick <b>NVIDIA</b>, <b>Groq</b>, <b>OpenRouter</b> or <b>Google Gemini</b> (all free), click
+    <b>Get a free key →</b>, create a key, paste it, press <b>Test &amp; save</b>. ClipCutter checks it and picks a model itself.
+    If the key stops working, it falls back to built-in hooks.</p>
+  <div class="box you"><span class="tag t-you">You</span> Creating the key means signing in on that site: you do it.
+    The agent may paste the key into ClipCutter only if you give it, and must never show it on screen or in chat.</div>
   <div class="box ai"><span class="tag t-ai">AI agent</span> Always look at the result: grab frames with
     <code>ffmpeg -ss 3 -i output/&lt;id&gt;/clip_01.mp4 -frames:v 1 frame.png</code> (also at the middle and the end) and check them
     before calling a clip ready.</div>
@@ -332,7 +339,7 @@ uv run clipcutter run "C:\Videos\stream.mp4" --clips 3</pre>
 </section>
 
 <!-- ============================== PART 4 ============================== -->
-<section class="br">
+<section>
   <h2>Part 4 · Find and join a campaign</h2>
   <p>We use <b>Content Rewards</b> on <b>Whop</b> (whop.com → Content Rewards). Other marketplaces work the same way.</p>
 
@@ -503,6 +510,7 @@ ffmpeg -i clip_01.mp4 -c:v libx264 -preset medium -b:v 2300k -maxrate 2600k -buf
     <tr><td>Mac: "can't be opened" / Windows: SmartScreen</td><td>Part 1A. Unsigned app; expected.</td></tr>
     <tr><td>Submission rejected</td><td>Read the reason, compare with Part 6, fix in the next clips. Don't re-submit the same post.</td></tr>
     <tr><td>Instagram link "couldn't read"</td><td>Use the <code>instagram.com/reel/&lt;id&gt;/</code> form.</td></tr>
+    <tr><td>AI key "didn't work"</td><td>Wrong/expired key: make a new one. "Free limit reached": wait or pick another service. Clips still get made with built-in hooks.</td></tr>
     <tr><td>Something else</td><td>Desktop app: "Show log file". Source: the terminal output and <code>.work/errors.log</code>. Open an issue on GitHub with it.</td></tr>
   </table>
 

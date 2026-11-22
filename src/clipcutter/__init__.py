@@ -10,7 +10,7 @@ def _common(sp: argparse.ArgumentParser) -> None:
     sp.add_argument("--clips", type=int, help="clips per video")
     sp.add_argument("--layout", choices=["blur", "crop", "split", "auto"])
     sp.add_argument("--style", choices=["genz", "hype", "clean"])
-    sp.add_argument("--llm", choices=["auto", "claude", "ollama", "templates"], help="who writes hooks/titles")
+    sp.add_argument("--llm", choices=["auto", "claude", "openai", "ollama", "templates"], help="who writes hooks/titles")
     sp.add_argument("--whisper", help="whisper model, e.g. mlx-community/whisper-base-mlx (faster)")
     sp.add_argument("--config", help="path to config.yaml")
     sp.add_argument("--campaign", help="clipping-campaign preset (CTA, logo, caption rules): bobby, kreekcraft, luckylatvian")
