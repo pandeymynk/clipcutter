@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build ClipCutter.app and a .dmg for this Mac's CPU (Apple Silicon or Intel).
+# Build ClipCutter.app and a .dmg for this Mac's CPU (Apple Silicon; Intel Macs are unsupported: no onnxruntime wheels).
 #   packaging/build_mac.sh            -> dist/ClipCutter-<version>-mac-<arch>.dmg
 # Needs: uv, Homebrew (for libfribidi). Everything else is downloaded.
 set -euo pipefail

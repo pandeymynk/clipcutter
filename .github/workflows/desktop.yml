@@ -19,12 +19,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-14          # Apple Silicon
+          - runner: macos-15          # Apple Silicon (Intel Macs: onnxruntime ships no Intel Mac wheels any more)
             arch: arm64
-          - runner: macos-15-intel    # Intel
-            arch: x86_64
     runs-on: ${{ matrix.runner }}
-    continue-on-error: ${{ matrix.arch == 'x86_64' }}   # Intel is best-effort; don't block a release on it
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -114,7 +111,6 @@ jobs:
           body: |
             Download the file for your computer:
             - **Mac with Apple chip (M1–M4):** `ClipCutter-…-mac-arm64.dmg`
-            - **Mac with Intel chip:** `ClipCutter-…-mac-x86_64.dmg`
             - **Windows 10/11:** `ClipCutter-…-windows-x64-setup.exe`
 
             First open shows a security warning because the app isn't code-signed yet.

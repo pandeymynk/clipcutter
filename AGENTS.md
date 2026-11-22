@@ -63,7 +63,7 @@ powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1   # -> dist
 PyInstaller (`packaging/clipcutter.spec`) bundles Python + deps; `packaging/fetch_vendor.py` downloads static ffmpeg/ffprobe,
 deno, libfribidi and Noto fonts into `packaging/vendor/`. Two executables share one folder: `ClipCutter` (windowed:
 `packaging/app_entry.py`, no args = desktop launcher) and `clipcutter-cli` (console, same CLI as `uv run clipcutter`).
-CI: `.github/workflows/desktop.yml` builds mac arm64 + Intel and Windows, smoke-tests (`doctor` + `packaging/smoke_test.py`),
+CI: `.github/workflows/desktop.yml` builds mac arm64 and Windows (no Intel Mac: onnxruntime has no macOS x86_64 wheels), smoke-tests (`doctor` + `packaging/smoke_test.py`),
 and a `v*` tag makes a **draft** release. User guide: [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Website (multi-user)

@@ -9,10 +9,11 @@ Go to the [Releases page](https://github.com/pandeymynk/clipcutter/releases/late
 | Your computer | File |
 |---|---|
 | Mac with an Apple chip (M1, M2, M3, M4…) | `ClipCutter-<version>-mac-arm64.dmg` |
-| Mac with an Intel chip | `ClipCutter-<version>-mac-x86_64.dmg` |
+| Mac with an Intel chip | not supported right now (see below) |
 | Windows 10 / 11 (64-bit) | `ClipCutter-<version>-windows-x64-setup.exe` |
 
 Not sure which Mac you have? Apple menu  → **About This Mac**. "Chip: Apple M…" means Apple chip; "Processor: Intel" means Intel.
+Intel Macs aren't supported at the moment: the speech-to-text engine's parts (onnxruntime) no longer ship for Intel Macs.
 
 The download is big (about 350–450 MB) because everything is inside: the video tools, the downloader, fonts
 (Hindi too) and the speech-to-text engine.
@@ -112,7 +113,7 @@ signing; the GitHub workflow would read the certificate from repository secrets.
 PyInstaller can't cross-compile, so each OS builds its own installer.
 
 ```bash
-# Mac (Apple Silicon builds arm64, Intel builds x86_64). Needs uv + Homebrew.
+# Mac (Apple Silicon). Needs uv + Homebrew.
 packaging/build_mac.sh                 # -> dist/ClipCutter-<version>-mac-<arch>.dmg
 ```
 
@@ -121,6 +122,6 @@ packaging/build_mac.sh                 # -> dist/ClipCutter-<version>-mac-<arch>
 powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1   # -> dist\ClipCutter-<version>-windows-x64-setup.exe
 ```
 
-On GitHub, `.github/workflows/desktop.yml` builds Mac (arm64 + Intel) and Windows, smoke-tests each build (`doctor` +
+On GitHub, `.github/workflows/desktop.yml` builds Mac (Apple Silicon) and Windows, smoke-tests each build (`doctor` +
 clipping a generated test video), and when you push a tag like `v0.2.0` puts all installers on a **draft** release.
 Check it, then press **Publish**.
