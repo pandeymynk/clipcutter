@@ -74,7 +74,7 @@ cli_pyz = PYZ(cli.pure)
 
 icon = str(HERE / "build" / ("icon.icns" if IS_MAC else "icon.ico"))
 # UTF-8 mode: Windows defaults files to cp1252, and clip JSON/captions contain emoji and Hindi
-UTF8 = [("X utf8_mode=1", None, "OPTION")]
+UTF8 = [("X utf8", None, "OPTION")]   # exact spelling: "X utf8_mode=1" is silently ignored
 app_exe = EXE(
     pyz, a.scripts, UTF8,
     exclude_binaries=True,
