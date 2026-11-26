@@ -140,6 +140,7 @@ def all_clips(cfg: dict) -> list[dict]:
 
 def make_handler(cfg: dict, jobs: Jobs):
     out_root = Path(cfg["output_dir"]).resolve()
+    edit_lock = threading.Lock()
 
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):  # quiet
@@ -192,6 +193,15 @@ def make_handler(cfg: dict, jobs: Jobs):
                     if not url.startswith("http"):
                         return self._json({"error": "paste a full link (https://…)"}, 400)
                     return self._json(jobs.add("run", url, url=url, clips=data.get("clips")))
+                if path == "/api/clips/edit":   # Edit box: title / post caption, or re-render hook + captions
+                    rel = unquote((data.get("src") or "").removeprefix("/files/"))
+                    mp4 = (out_root / rel).resolve()
+                    if out_root not in mp4.parents or not mp4.with_suffix(".json").is_file():
+                        return self._json({"error": "clip not found"}, 404)
+                    with edit_lock:   # one re-render at a time
+                        rec = pipeline.edit_clip(mp4.parent, mp4.name, json.loads(json.dumps(cfg)),
+                                                 **{k: data.get(k) for k in ("title", "post_caption", "hook", "captions")})
+                    return self._json({"ok": True, "hook": rec["hook"]})
                 if path.startswith("/api/jobs/") and path.endswith("/cancel"):
                     return self._json(jobs.cancel(path.split("/")[3]))
                 if path == "/api/ai":
