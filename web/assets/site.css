@@ -253,6 +253,13 @@ footer{border-top:1px solid var(--line);padding:64px 0 48px;color:var(--dim);fon
 .fgrid p{max-width:340px;margin:14px 0 0}
 .fbot{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-top:44px;padding-top:24px;border-top:1px solid var(--line);font-size:13px}
 
+/* editor section */
+.edshot{position:relative;padding:0 0 50px 40px}
+#editor img{height:auto;max-width:100%}
+.edshot .screen img{width:100%;display:block}
+.edphone{position:absolute;left:0;bottom:0;width:150px;border-radius:26px;padding:6px;background:#0a0b0f;border:1px solid #2c3240;box-shadow:0 40px 80px -10px rgba(0,0,0,.9)}
+.edphone img{width:100%;display:block;border-radius:20px}
+
 /* responsive */
 @media (max-width:960px){
   .menu{display:none}.burger{display:grid;place-items:center}
@@ -266,6 +273,7 @@ footer{border-top:1px solid var(--line);padding:64px 0 48px;color:var(--dim);fon
   .stats,.camps{grid-template-columns:1fr 1fr}
   .fgrid{grid-template-columns:1fr 1fr}
   .reelphone{width:260px;margin:0 auto}
+  .edshot{padding:0 0 40px 24px}.edphone{width:100px}
   section{padding:80px 0}
   .band{padding:52px 22px}
 }

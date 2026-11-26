@@ -45,14 +45,14 @@ def head(title, desc, path="", image="img/video-thumb.jpg"):
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/site.css?v=5">
+<link rel="stylesheet" href="assets/site.css?v=6">
 </head>
 <body>
 """
 
 
 def nav(active=""):
-    items = [("index.html#demo", "How it works", "how"), ("index.html#features", "Features", "features"),
+    items = [("index.html#demo", "How it works", "how"), ("index.html#features", "Features", "features"), ("index.html#editor", "Editor", "editor"),
              ("index.html#campaigns", "Campaigns", "campaigns"), ("download.html", "Download", "download"),
              ("index.html#faq", "FAQ", "faq")]
     links = "".join(f'<a href="{h}"{" class=on" if k == active else ""}>{t}</a>' for h, t, k in items)
@@ -81,7 +81,7 @@ FOOT = f"""<footer>
     <div class="fbot"><span>© <span data-year>2026</span> ClipCutter</span><span>Not affiliated with Rockstar Games, YouTube, Twitch, Kick or any campaign platform.</span></div>
   </div>
 </footer>
-<script src="assets/site.js?v=5" defer></script>
+<script src="assets/site.js?v=6" defer></script>
 </body>
 </html>
 """
@@ -106,8 +106,8 @@ FAQ = [
     ("Do I need coding skills or an API key?", "No. Install it and paste a link. Clips, captions and hooks work out of the box. A free AI key (NVIDIA, Groq, OpenRouter or Gemini) is optional, only if you want AI-written hooks."),
     ("Which devices does it run on?", "Windows 10/11 (64-bit), Macs with an Apple chip (M1–M4), and Android 10+ phones (beta). 8 GB RAM is enough on a computer; on Android, 6 GB or more works best."),
     ("How long does a clip take?", "Most of the time goes into downloading the video. A 1h 43m GTA 6 stream took about 15 minutes on a normal laptop, and each clip rendered in under 30 seconds. Phones are slower."),
-    ("Does it work for Hindi streams?", "Yes. It understands Hindi and English hype words, and Hindi captions can be shown in Hinglish (Roman letters)."),
-    ("Can I edit a clip?", "Yes. Change the hook text or fix any caption word, and the clip re-renders in a few seconds. Title and post caption are editable too."),
+    ("Does it work for Hindi streams?", "Yes. It understands Hindi and English hype words, and captions can be shown in Hinglish (Roman letters), Hindi script or English."),
+    ("Can I edit a clip?", "Yes, in the built-in editor on Windows, Mac and Android. Pick the layout (gameplay on top and the streamer below, or blur/crop), drag the facecam box, turn captions on or off, show them in Hinglish, Hindi script or English, change their style, size and position, and edit the hook, caption words, title and post caption. Save and the clip re-renders in seconds."),
     ("Will I earn money with it?", "ClipCutter makes the clips. Earnings come from clipping campaigns and depend on views, the campaign's rate and its rules. There's no guarantee, and fake views get accounts banned."),
     ("Can I clip any video?", "Only clip content you have permission to use, such as a campaign's own footage or a streamer who allows clipping."),
 ]
@@ -212,15 +212,15 @@ def index():
         <p>Every clip opens on its peak moment, zoomed in, with big hook text and a bass hit, so viewers don't scroll past.</p>
         <div class="viz"><div class="hookdemo"><i class="pk"></i><i></i><i></i><i></i><i></i></div><div style="margin-top:8px">peak moment → setup → payoff</div></div></div>
       <div class="feat w3 rv d1"><div class="ic">{icon('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8M8 13h5"/>')}</div><h3>Word-by-word captions</h3>
-        <p>Captions pop in time with the voice. Hindi audio can be shown in Hinglish.</p>
+        <p>Captions pop in time with the voice. Show them in Hinglish, Hindi script or English, or turn them off.</p>
         <div class="viz"><div class="capdemo">{caps}</div></div></div>
       <div class="feat rv"><div class="ic">{icon('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>')}</div><h3>Finds the best moments</h3>
         <p>Loudness, scene cuts, chat spikes and hype words, then each clip snaps to full sentences.</p>
         <div class="viz"><div class="wave">{"".join(f'<i class="{"hi" if k in (6,7,8,15,16) else ""}" style="height:{[30,45,38,52,40,60,85,95,80,50,42,36,48,40,58,92,88,46,38,30][k]}%;animation-delay:-{k*0.08:.2f}s"></i>' for k in range(20))}</div></div></div>
       <div class="feat rv d1"><div class="ic">{icon('<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>')}</div><h3>Vertical 9:16</h3>
-        <p>Blur, crop or split-facecam layout, ready for Shorts, Reels and TikTok.</p></div>
-      <div class="feat rv d2"><div class="ic">{icon('<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>')}</div><h3>Edit any clip</h3>
-        <p>Change the hook or fix caption words. The clip re-renders in seconds.</p></div>
+        <p>Gameplay on top, the streamer's facecam below, found automatically. Or blur and crop.</p></div>
+      <div class="feat rv d2"><div class="ic">{icon('<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>')}</div><h3>Built-in editor</h3>
+        <p>Layout, facecam box, captions, hook and title. Save and it re-renders in seconds.</p></div>
       <div class="feat w3 rv"><div class="ic">{icon('<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/>')}</div><h3>Title, caption, hashtags</h3>
         <p>Written for every clip, plus campaign presets that add the right label, logo, CTA and exact post caption.</p></div>
       <div class="feat w3 rv d1"><div class="ic">{icon('<rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>')}</div><h3>Private by design</h3>
@@ -229,7 +229,31 @@ def index():
   </div>
 </section>
 
-<section class="alt">
+<section id="editor" class="alt">
+  <div class="wrap split">
+    <div>
+      <span class="eyebrow rv">New · built-in editor</span>
+      <h2 class="rv d1">Make every clip yours.</h2>
+      <p class="sub rv d2">Open any clip and change it in one place, on Windows, Mac or Android. Save and it re-renders in seconds.</p>
+      <div class="points">
+        <div class="rv d1"><i>✓</i><span><b>Gameplay on top, streamer below.</b> The facecam is found for you; drag the box if you want it somewhere else.</span></div>
+        <div class="rv d2"><i>✓</i><span><b>Captions your way.</b> Hinglish, Hindi script or English, Gen Z, hype or clean, any size and position, or switch them off.</span></div>
+        <div class="rv d3"><i>✓</i><span><b>Fix any word.</b> Edit the hook, the caption words, the title and the post caption.</span></div>
+        <div class="rv d4"><i>✓</i><span><b>Your call on extras.</b> Turn the big hook text, the best-moment replay and the small title on or off.</span></div>
+      </div>
+    </div>
+    <div class="edshot rv d2">
+      <div class="screen"><img src="img/editor-desktop.jpg" alt="ClipCutter editor on desktop: preview, hook text, captions language, style, position and size" loading="lazy" width="1600" height="1000"></div>
+      <div class="edphone"><img src="img/editor-android.jpg" alt="ClipCutter editor on Android: gameplay on top, facecam box" loading="lazy" width="540" height="1200"></div>
+    </div>
+  </div>
+  <div class="wrap" style="margin-top:56px">
+    <div class="screen rv"><img src="img/editor-layout.jpg" alt="Choosing the layout and dragging the facecam box in the ClipCutter editor" loading="lazy" width="1600" height="1000" style="width:100%;display:block"></div>
+    <p class="mlabel rv" style="margin-top:16px">Pick the layout and drag the facecam box. Demo footage: Big Buck Bunny (CC BY, Blender Foundation)</p>
+  </div>
+</section>
+
+<section>
   <div class="wrap reel">
     <div>
       <span class="eyebrow rv">See the result</span>

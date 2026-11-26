@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import time
 from pathlib import Path
 
@@ -195,14 +196,14 @@ def run(target: str, cfg: dict, chat: str | None = None, out_sub: str = "") -> t
             progress(f"Clip {k} of {len(chosen)}: editing (hook, captions, 9:16)…", _span(RENDER, base_f + step_f * 0.55))
             shifted = _shift(clip, a)
             render.render(shifted, analyze.probe(section), section, cfg, out, clip_work)
-            clip["layout"] = shifted.get("layout")
+            clip["layout"], clip["facecam"] = shifted.get("layout"), shifted.get("facecam")
             video_path, offset = section, a
 
         record = {
             "file": out.name, "source": src.url or str(src.video), "source_title": src.title,
             "creator": src.uploader,
             "start": m.start, "end": m.end, "peak": peak, "score": m.score,
-            "virality": virality(m.score), "layout": clip.get("layout"),
+            "virality": virality(m.score), "layout": clip.get("layout"), "facecam": clip.get("facecam"),
             "signals": m.reasons, "transcript": transcript, **meta,
             "post_caption": f"{meta['description']} {' '.join(meta['hashtags'])}".strip(),
             # for edit_clip(): re-render with new hook/caption text without re-downloading
@@ -265,11 +266,52 @@ def rerender(out_dir: str, cfg: dict) -> None:
         log(f"{mp4.name} re-rendered ({rec['layout']})")
 
 
+# Editor options (desktop web app + Android app). Stored per clip in record["edit"].
+EDIT_DEFAULTS = {
+    "layout": "auto",          # auto | split (gameplay top, facecam below) | split_top (facecam on top) | blur | crop
+    "facecam": None,           # [x, y, w, h] fractions of the source frame; None = detect
+    "captions": True,          # word-by-word captions on/off
+    "lang": "hinglish",        # hinglish (Hindi -> Roman letters) | original (as spoken, Hindi script) | english
+    "style": "genz",           # genz | hype | clean
+    "position": "low",         # low | middle | high
+    "size": "normal",          # small | normal | big
+    "hook_text": True,         # big hook text over the first seconds
+    "hook_replay": True,       # replay the peak moment (zoomed) before the clip
+    "header": True,            # small hook text at the top for the whole clip
+}
+_POS = {"low": 1220, "middle": 1050, "high": 880}
+_SIZE = {"small": 72, "normal": 88, "big": 104}
+FACECAM_PRESETS = {   # quick picks in the editor, [x, y, w, h]
+    "top-left": [0.0, 0.0, 0.25, 0.33], "top-right": [0.75, 0.0, 0.25, 0.33],
+    "bottom-left": [0.0, 0.67, 0.25, 0.33], "bottom-right": [0.75, 0.67, 0.25, 0.33],
+}
+
+
+def editor_state(out_dir: str | Path, name: str, cfg: dict) -> dict:
+    """Everything the editor shows for one clip: options, caption words in the chosen language, texts."""
+    out = Path(out_dir)
+    rec = json.loads((out / f"{Path(name).stem}.json").read_text(encoding="utf-8"))
+    opt = _options(rec, cfg)
+    words = rec.get("words_en") if opt["lang"] == "english" and rec.get("words_en") else rec.get("words") or []
+    return {"options": opt, "captions": " ".join(w["w"] for w in words) or rec.get("transcript", ""),
+            "hook": rec.get("hook", ""), "title": rec.get("title", ""), "post_caption": rec.get("post_caption", ""),
+            "presets": FACECAM_PRESETS, "has_video": _clip_source(rec, out, Path(name).stem, cfg)[0] is not None}
+
+
+def _options(rec: dict, cfg: dict) -> dict:
+    opt = {**EDIT_DEFAULTS, "style": cfg.get("style", "genz"), "header": cfg.get("header", True),
+           "layout": rec.get("layout") or EDIT_DEFAULTS["layout"], "facecam": rec.get("facecam")}
+    opt.update(rec.get("edit") or {})
+    return opt
+
+
 def edit_clip(out_dir: str | Path, name: str, cfg: dict, title: str | None = None,
-              post_caption: str | None = None, hook: str | None = None, captions: str | None = None) -> dict:
-    """Edit a finished clip. Title/post caption are saved as text; a new hook or new on-video caption words
-    re-render the clip from the downloaded video (word timings are kept, or spread over the clip if the
-    number of words changed). Returns the updated record."""
+              post_caption: str | None = None, hook: str | None = None, captions: str | None = None,
+              options: dict | None = None) -> dict:
+    """Edit a finished clip. Title/post caption are saved as text. A new hook, new caption words or changed
+    editor options (layout, facecam, captions on/off, language, style, position, size, hook/header) re-render
+    the clip from the downloaded video. Caption word timings are kept, or spread over the clip if the
+    number of words changed. Returns the updated record."""
     out = Path(out_dir)
     stem = Path(name).stem
     rec_path, mp4 = out / f"{stem}.json", out / f"{stem}.mp4"
@@ -278,27 +320,45 @@ def edit_clip(out_dir: str | Path, name: str, cfg: dict, title: str | None = Non
         rec["title"] = title.strip()
     if post_caption is not None:
         rec["post_caption"] = post_caption.strip()
-    rerender = False
+    old = _options(rec, cfg)
+    opt = {**old, **{k: v for k, v in (options or {}).items() if k in EDIT_DEFAULTS}}
+    if opt["facecam"] and opt["layout"] in ("auto", "blur", "crop") and opt["facecam"] != old["facecam"]:
+        opt["layout"] = "split"   # picking a facecam means: use it
+    rerender = opt != old
     if hook is not None and hook.strip() and hook.strip() != rec.get("hook"):
         rec["hook"] = hook.strip()
         rerender = True
-    words = rec.get("words") or _spread(rec.get("transcript", "").split(), rec["start"], rec["end"])
+    video, offset = _clip_source(rec, out, stem, cfg)
+    key = "words_en" if opt["lang"] == "english" else "words"
+    if key == "words_en" and not rec.get("words_en"):
+        if not video:
+            raise RuntimeError("The downloaded video for this clip is gone, so English captions can't be made.")
+        rec["words_en"] = _translate(video, offset, rec)
+    words = rec.get(key) or _spread(rec.get("transcript", "").split(), rec["start"], rec["end"])
     if captions is not None and captions.split() != [w["w"] for w in words]:
         words = _retime(words, captions.split(), rec["start"], rec["end"])
         rerender = True
-    rec["words"], rec["transcript"] = words, " ".join(w["w"] for w in words)
+    rec[key] = words
+    if key == "words":
+        rec["transcript"] = " ".join(w["w"] for w in words)
+    rec["edit"] = opt
     _save_record(out, rec_path, rec)   # text edits are kept even if the re-render below fails
     if not rerender:
         return rec
-    video, offset = _clip_source(rec, out, stem, cfg)
     if not video:
-        raise RuntimeError("The downloaded video for this clip is gone, so the hook/captions can't be re-rendered. "
+        raise RuntimeError("The downloaded video for this clip is gone, so it can't be re-rendered. "
                            "Title and post caption were saved.")
+    cfg = json.loads(json.dumps(cfg))
     if rec.get("campaign"):
         from . import campaigns
-        cfg = json.loads(json.dumps(cfg))
         campaigns.apply(cfg, rec["campaign"])   # same CTA / logo / censoring as the first render
-    cfg = {**cfg, "layout": rec.get("layout") or cfg["layout"]}
+    cfg["layout"] = opt["layout"]
+    cfg["facecam"] = opt["facecam"] if opt["layout"] in ("auto", "split", "split_top") else None
+    cfg["style"] = opt["style"]
+    cfg["header"] = bool(opt["header"])
+    cfg["captions"].update(enabled=bool(opt["captions"]), y=_POS.get(opt["position"], 1220),
+                           size=_SIZE.get(opt["size"], 88), lang="original" if opt["lang"] != "hinglish" else "auto")
+    cfg["hook"].update(enabled=bool(opt["hook_replay"]), text=bool(opt["hook_text"]))
     start, end, peak = rec["start"], rec["end"], rec["peak"]
     hook_start = max(start, peak - 1.0)
     hook_dur = min(cfg["hook"]["seconds"], end - hook_start) if cfg["hook"]["enabled"] else 0.0
@@ -310,7 +370,37 @@ def edit_clip(out_dir: str | Path, name: str, cfg: dict, title: str | None = Non
     work = Path(cfg["work_dir"]) / out.name / f"{stem}_edit"
     render.render(clip, analyze.probe(video), video, cfg, tmp, work)
     tmp.replace(mp4)
+    rec["layout"], rec["facecam"] = clip.get("layout"), clip.get("facecam")
+    rec["edit"] = {**opt, "layout": opt["layout"] if opt["layout"] == "auto" else rec["layout"],
+                   "facecam": rec["facecam"]}
+    _save_record(out, rec_path, rec)
     return rec
+
+
+def _translate(video: Path, offset: float, rec: dict) -> list[dict]:
+    """English caption words for the clip's span (Whisper translate), in source-video time."""
+    a, b = rec["start"] - offset, rec["end"] - offset
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{max(0.0, a):.3f}", "-t", f"{b - a:.3f}", "-i", str(video),
+                          "-vn", "-ac", "1", "-ar", str(analyze.SR), "-f", "s16le", "-"],
+                         capture_output=True, check=True).stdout
+    pcm = np.frombuffer(raw, np.int16)
+    words = analyze.translate_window(pcm, 0, len(pcm) / analyze.SR)
+    return [{**w, "s": round(w["s"] + rec["start"], 2), "e": round(w["e"] + rec["start"], 2)} for w in words]
+
+
+def clip_frame(out_dir: str | Path, name: str, cfg: dict) -> Path | None:
+    """A still of the source video (not the 9:16 clip) at the clip's peak, for picking the facecam box."""
+    out = Path(out_dir)
+    stem = Path(name).stem
+    rec = json.loads((out / f"{stem}.json").read_text(encoding="utf-8"))
+    video, offset = _clip_source(rec, out, stem, cfg)
+    if not video:
+        return None
+    dest = Path(cfg["work_dir"]) / out.name / f"{stem}_edit" / "source.jpg"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{max(0.0, rec['peak'] - offset):.2f}", "-i", str(video),
+                    "-frames:v", "1", "-vf", "scale=960:-2", "-q:v", "4", str(dest)], check=True)
+    return dest
 
 
 def _clip_source(rec: dict, out: Path, stem: str, cfg: dict) -> tuple[Path | None, float]:

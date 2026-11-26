@@ -20,9 +20,11 @@ Needs: an **arm64 phone on Android 10 or newer**, about 1 GB free storage (plus 
 - **Share** opens the Android share sheet (Instagram, YouTube, WhatsApp…). The post caption is copied to the
   clipboard first, because Instagram and TikTok ignore shared text: paste it in their caption box.
 - **Save** copies the clip to `Movies/ClipCutter` (shows in the gallery). **Copy** copies title + caption.
-- **Edit** changes a clip: title and post caption save instantly; a new hook or corrected caption words
-  re-render the video on the phone (about 20 s on the test emulator). Same number of caption words keeps
-  their timing; more or fewer are spread over the clip. The desktop web app has the same Edit box.
+- **Edit** opens the built-in editor (the desktop app has the same one): layout (auto, gameplay on top /
+  person below, person on top, blurred, crop), a facecam box you drag and resize on a still of the video,
+  captions on/off, language (Hinglish, as spoken in Hindi script, English via Whisper translate), style,
+  position and size, caption words, hook text / hook replay / small title on/off, title and post caption.
+  **Save & render** re-renders on the phone (about 25 s on the test emulator) and the preview shows the result.
 - **Log** shows what the pipeline is doing; copy it when reporting a problem. **About** checks the built-in tools.
 
 ## How it works
@@ -94,7 +96,8 @@ The emulator runs on the Mac's fast cores: expect **2–4x slower** analysis/ren
 - **Emoji are left out** of hooks/captions on Android: Chaquopy's FreeType 2.9 can't draw colour-emoji fonts.
 - **Hindi (Devanagari) captions** use the bundled Noto font, but Chaquopy's Pillow has no raqm/fribidi, so
   conjuncts and matras may not join correctly. Hinglish (Roman) captions, the default, are fine.
-- **No facecam split layout**: no OpenCV for Android Python 3.13, so clips use the blur layout (or crop).
+- **Facecam detection** uses Android's built-in face detector (no OpenCV for Android Python 3.13). It found the
+  webcam in the GTA test stream; if it misses one, set the box by hand in the editor.
 - **YouTube downloads break when YouTube changes**: the bundled yt-dlp is fixed at build time; update the app.
   "Confirm you're not a bot" errors depend on the network (mobile data vs Wi-Fi) and can't be fixed in the app.
 - **Long videos** (> 2 h) are fetched audio-first and then per-clip sections, like the desktop app; that path,
