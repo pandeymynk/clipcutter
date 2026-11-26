@@ -211,6 +211,8 @@ def transcribe_window(pcm: np.ndarray, start: float, end: float, model: str, lan
     audio = np.asarray(pcm[a:b], dtype=np.float32) / 32768.0
     if audio.size < SR:
         return []
+    if whisper_backend() == "whisper.cpp":   # Android app
+        return _whisper_cpp(audio, start, language)
     # anti-loop: few temperature retries + drop hallucinated text in silent/music parts
     # (without this, music in Hindi videos made one window take 5+ minutes)
     common = dict(word_timestamps=True, language=language, condition_on_previous_text=False,
@@ -263,6 +265,67 @@ def translate_window(pcm: np.ndarray, start: float, end: float) -> list[dict]:
             for w in seg.words or []:
                 if w.word.strip():
                     words.append({"w": w.word.strip(), "s": round(start + w.start, 2), "e": round(start + w.end, 2)})
+    return words
+
+
+GGML_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-{}.bin"
+
+
+def ggml_model(name: str) -> Path:
+    """whisper.cpp model file (Android), downloaded once with progress. ~60 MB for base-q5_1."""
+    from .system import user_data_dir
+    import os
+    import urllib.request
+
+    dest = user_data_dir() / "models" / f"ggml-{name}.bin"
+    if dest.exists():
+        return dest
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    say = on_model_progress or (lambda t: print(t, flush=True))
+    part = dest.with_suffix(".part")
+    req = urllib.request.Request(GGML_URL.format(name), headers={"User-Agent": "clipcutter"})
+    with urllib.request.urlopen(req, timeout=60) as r, open(part, "wb") as f:
+        total, got, shown = int(r.headers.get("Content-Length") or 0), 0, -1
+        while chunk := r.read(1 << 20):
+            f.write(chunk)
+            got += len(chunk)
+            step = int(20 * got / total) if total else got >> 23
+            if step == shown:
+                continue
+            shown = step
+            say(f"Downloading the speech model (first time only): "
+                + (f"{100 * got / total:.0f}% of {total / 1e6:.0f} MB" if total else f"{got / 1e6:.0f} MB"))
+    os.replace(part, dest)
+    return dest
+
+
+def _whisper_cpp(audio: np.ndarray, start: float, language: str | None) -> list[dict]:
+    """Speech-to-text with the whisper.cpp command-line tool, one word per segment."""
+    import os
+    import tempfile
+    import wave
+
+    model = ggml_model(os.environ.get("CLIPCUTTER_WHISPER_MODEL", "base-q5_1"))
+    threads = max(2, min(6, os.cpu_count() or 4))
+    with tempfile.TemporaryDirectory() as td:
+        wav = Path(td) / "a.wav"
+        with wave.open(str(wav), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(SR)
+            w.writeframes((np.clip(audio, -1, 1) * 32767).astype(np.int16).tobytes())
+        subprocess.run(["whisper-cli", "-m", str(model), "-f", str(wav), "-l", language or "auto",
+                        "-t", str(threads), "-ml", "1", "-sow", "-sns", "-np", "-oj", "-of", str(Path(td) / "out")],
+                       check=True, capture_output=True)
+        data = json.loads((Path(td) / "out.json").read_text(encoding="utf-8", errors="replace"))
+    words = []
+    for seg in data.get("transcription", []):
+        text = seg.get("text", "").strip()
+        if not re.search(r"\w", text) or text.startswith(("[", "(")):   # ".", [Music], (laughs)
+            continue
+        off = seg.get("offsets", {})
+        words.append({"w": text, "s": round(start + off.get("from", 0) / 1000, 2),
+                      "e": round(start + off.get("to", 0) / 1000, 2)})
     return words
 
 

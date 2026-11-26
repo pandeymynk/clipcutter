@@ -1,0 +1,10 @@
+.gradle/
+build/
+app/build/
+local.properties
+native/.src/
+native/.build/
+app/src/main/jniLibs/
+*.keystore
+!debug.keystore
+app/src/main/assets/fonts/

@@ -53,6 +53,7 @@ frames, e.g. `ffmpeg -ss 3 -i output/<id>/clip_01.mp4 -frames:v 1 frame.png`.
 | `config.py` | defaults; users override with `config.yaml` (see `config.example.yaml`) |
 | `desktop.py` | **desktop app** launcher: chdir to the per-user data folder, start the web app, open the browser, small Tk window |
 | `updater.py` | desktop app: downloads a newer yt-dlp wheel from PyPI into the data folder; `activate()` puts it before the bundled one |
+| `android/` | **Android app** (Kotlin + Chaquopy): runs this same package on the phone; `android/app/src/main/python/android_app.py` is the bridge. See docs/ANDROID.md |
 
 ## Desktop app (one-click install)
 
@@ -65,6 +66,14 @@ deno, libfribidi and Noto fonts into `packaging/vendor/`. Two executables share 
 `packaging/app_entry.py`, no args = desktop launcher) and `clipcutter-cli` (console, same CLI as `uv run clipcutter`).
 CI: `.github/workflows/desktop.yml` builds mac arm64 and Windows (no Intel Mac: onnxruntime has no macOS x86_64 wheels), smoke-tests (`doctor` + `packaging/smoke_test.py`),
 and a `v*` tag makes a **draft** release. User guide: [docs/INSTALL.md](docs/INSTALL.md).
+
+## Android app (offline APK)
+
+```bash
+android/native/build.sh                 # NDK: ffmpeg+x264, ffprobe, qjs (QuickJS), whisper-cli -> jniLibs/arm64-v8a/lib*.so
+cd android && ./gradlew assembleDebug   # Chaquopy bundles Python 3.13 + src/clipcutter
+```
+Guide + test results: [docs/ANDROID.md](docs/ANDROID.md). CI: `.github/workflows/android.yml`.
 
 ## Website (multi-user)
 
@@ -131,6 +140,12 @@ Key rule: the website never downloads a whole video. It analyses text, then down
   `updater.activate()` reads the bundled version from `yt_dlp_version.txt` for that reason.
 - **Windowed Windows app:** no console, so `prepare_bundle()` hides ffmpeg console windows (CREATE_NO_WINDOW) and stdout
   goes to `<data>/logs/clipcutter.log`. Output is forced to UTF-8 (✅ and Hindi crash cp1252 pipes).
+- **Android:** apps may only exec files from the native-library folder, so tools ship as `lib*.so` and
+  `android_app.setup()` symlinks them into `<files>/bin`. ffmpeg needs `--enable-indev=lavfi` (the hook "boom")
+  and must be built **without SVE** (emulators/devices that report it but trap it crash with SIGILL).
+  Chaquopy's FreeType can't draw colour emoji (`render._emoji_face` checks and skips them).
+- **Hook input:** `render.render` reads the video twice (main + hook). With one input ffmpeg buffers every frame
+  between the main start and the later hook: 3+ GB at 1080p60, which got ffmpeg OOM-killed on a 4 GB phone.
 - **OS-specific code goes in `system.py` only.** Don't hard-code `/System/Library/...` or `videotoolbox` anywhere else.
 
 ## Conventions
