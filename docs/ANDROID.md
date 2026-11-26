@@ -19,7 +19,10 @@ Needs: an **arm64 phone on Android 10 or newer**, about 1 GB free storage (plus 
   foreground service with a progress notification and a wake lock.
 - **Share** opens the Android share sheet (Instagram, YouTube, WhatsApp…). The post caption is copied to the
   clipboard first, because Instagram and TikTok ignore shared text: paste it in their caption box.
-- **Save** copies the clip to `Movies/ClipCutter` (shows in the gallery). **Copy text** copies title + caption.
+- **Save** copies the clip to `Movies/ClipCutter` (shows in the gallery). **Copy** copies title + caption.
+- **Edit** changes a clip: title and post caption save instantly; a new hook or corrected caption words
+  re-render the video on the phone (about 20 s on the test emulator). Same number of caption words keeps
+  their timing; more or fewer are spread over the clip. The desktop web app has the same Edit box.
 - **Log** shows what the pipeline is doing; copy it when reporting a problem. **About** checks the built-in tools.
 
 ## How it works
@@ -38,6 +41,12 @@ Android 10+ only lets an app execute files from its native-library folder, so th
 `android_app.py` links them as `<files>/bin/ffmpeg` etc. and puts that on `PATH`, so the pipeline and
 yt-dlp call them by name. Android-specific choices live in `system.py` (`IS_ANDROID`: fonts, x264 preset,
 QuickJS runtime, whisper.cpp backend) and `analyze.py` (`_whisper_cpp`).
+
+Self-repair: at start the app checks each tool and uses the first way that works: run it directly, run it
+through Android's loader (`/system/bin/linker64`) for phones that block exec, or unpack a fresh copy from the
+APK and run that through the loader. If Python can't look up a hostname, it asks Android's Java network stack.
+The top of every job's Log says which way each tool runs. Before a download the app checks the internet and
+explains how to unblock it (Xiaomi/POCO "Restrict data usage", Data Saver).
 
 Files: app data in the app's private folder (`/data/data/app.clipcutter.android/files`: `output/`, `.work/`, `models/`).
 Uninstalling the app deletes them; saved clips in `Movies/ClipCutter` stay.

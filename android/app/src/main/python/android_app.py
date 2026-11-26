@@ -15,10 +15,23 @@ HOME: Path | None = None
 TOOLS = {"ffmpeg": "libffmpeg.so", "ffprobe": "libffprobe.so", "qjs": "libqjs.so", "whisper-cli": "libwhisper.so"}
 
 
-def setup(home: str, native_dir: str, resources: str) -> str:
-    """home = app files dir, native_dir = nativeLibraryDir (where the arm64 tools are), resources = fonts etc."""
+LINKER = "/system/bin/linker64"
+PROBE = {"ffmpeg": ["-version"], "ffprobe": ["-version"], "qjs": ["-e", "0"], "whisper-cli": ["-h"]}
+RUN: dict[str, list[str]] = {}      # tool name -> command prefix that works on this phone
+TOOL_NOTES: dict[str, str] = {}     # tool name -> how it runs / why it doesn't (shown in About and the Log)
+
+
+def setup(home: str, native_dir: str, resources: str, apk: str = "") -> str:
+    """home = app files dir, native_dir = nativeLibraryDir (where the arm64 tools are), resources = fonts etc.,
+    apk = the installed APK (the tools are unpacked from it if a phone didn't install them properly)."""
     global HOME
     HOME = Path(home)
+    dbg = HOME / "debug.env"   # testing only (adb run-as): e.g. CLIPCUTTER_FORCE_UNPACK=1
+    if dbg.exists():
+        for line in dbg.read_text().splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                os.environ[k.strip()] = v.strip()
     os.environ["CLIPCUTTER_HOME"] = home
     os.environ["CLIPCUTTER_NATIVE"] = native_dir
     os.environ["CLIPCUTTER_RESOURCES"] = resources
@@ -32,8 +45,7 @@ def setup(home: str, native_dir: str, resources: str) -> str:
             if os.path.realpath(link) == str(target):
                 continue
             link.unlink()
-        if target.exists():
-            link.symlink_to(target)
+        link.symlink_to(target)   # even if missing: yt-dlp finds tools by name on PATH; the launcher fixes the rest
     os.environ["PATH"] = os.pathsep.join([str(bin_dir), os.environ.get("PATH", "/system/bin")])
     try:
         import certifi
@@ -43,21 +55,138 @@ def setup(home: str, native_dir: str, resources: str) -> str:
     os.environ.setdefault("TMPDIR", str(HOME / "tmp"))
     Path(os.environ["TMPDIR"]).mkdir(parents=True, exist_ok=True)
     os.chdir(home)   # config.yaml / ai-settings.json live here, like the desktop app's data folder
+    for name, lib in TOOLS.items():
+        _resolve(name, Path(native_dir) / lib, apk)
+    _patch_subprocess()
+    _patch_dns()
     return doctor()
 
 
-def doctor() -> str:
-    """One line per tool, shown in the app's About box and the logs."""
+def _works(cmd: list[str]) -> tuple[bool, str]:
+    """Can this command start at all? (A non-zero exit is fine; exec errors and crashes are not.)"""
     import subprocess
-    lines = [f"python {sys.version.split()[0]} on {sys.platform}"]
-    for name, args in (("ffmpeg", ["-version"]), ("ffprobe", ["-version"]), ("qjs", ["-h"]),
-                       ("whisper-cli", ["-h"])):
+    try:
+        p = _orig_run(cmd, capture_output=True, timeout=60)
+    except OSError as e:
+        return False, f"{e.__class__.__name__} [Errno {e.errno}] {e.strerror}"
+    except subprocess.TimeoutExpired:
+        return False, "timed out"
+    if p.returncode < 0 or p.returncode in (126, 127):
+        return False, f"exit {p.returncode} {p.stderr[-120:]!r}"
+    return True, ""
+
+
+def _resolve(name: str, lib: Path, apk: str) -> None:
+    """Find a way to run a bundled tool on this phone:
+    1) run it from the app's native-library folder (normal),
+    2) run it through Android's loader (/system/bin/linker64), for phones that block exec there,
+    3) unpack a fresh copy from the APK and run that through the loader (tool missing or damaged)."""
+    tries: list[tuple[str, list[str]]] = []
+    if os.environ.get("CLIPCUTTER_FORCE_UNPACK"):
+        lib = Path("/nonexistent") / lib.name
+    if lib.exists() and not os.environ.get("CLIPCUTTER_FORCE_LINKER"):
+        tries.append(("direct", [str(lib)]))
+    if lib.exists() and os.path.exists(LINKER):
+        tries.append(("loader", [LINKER, str(lib)]))
+    errors = []
+    for mode, cmd in tries:
+        ok, err = _works(cmd + PROBE[name])
+        if ok:
+            RUN[name], TOOL_NOTES[name] = cmd, mode
+            return
+        errors.append(f"{mode}: {err}")
+    copy = _unpack(lib.name, apk, errors)
+    if copy and os.path.exists(LINKER):
+        ok, err = _works([LINKER, str(copy)] + PROBE[name])
+        if ok:
+            RUN[name], TOOL_NOTES[name] = [LINKER, str(copy)], "unpacked from APK"
+            return
+        errors.append(f"unpacked: {err}")
+    TOOL_NOTES[name] = "NOT WORKING (" + "; ".join(errors or ["file missing"]) + ")"
+
+
+def _unpack(lib_name: str, apk: str, errors: list) -> Path | None:
+    import zipfile
+    dest = HOME / "tools" / lib_name
+    try:
+        with zipfile.ZipFile(apk) as z:
+            info = z.getinfo(f"lib/arm64-v8a/{lib_name}")
+            if not (dest.exists() and dest.stat().st_size == info.file_size):
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                with z.open(info) as src, open(f"{dest}.part", "wb") as out:
+                    while chunk := src.read(1 << 20):
+                        out.write(chunk)
+                os.replace(f"{dest}.part", dest)
+        dest.chmod(0o700)
+        return dest
+    except Exception as e:  # noqa: BLE001
+        errors.append(f"unpack: {e}")
+        return None
+
+
+import subprocess as _sp  # noqa: E402
+_orig_run = _sp.run
+_orig_popen_init = _sp.Popen.__init__
+
+
+def _patch_subprocess() -> None:
+    """Every call of a bundled tool by name or path (pipeline, yt-dlp) goes through the way found above."""
+    if getattr(_sp.Popen.__init__, "_cc", False):
+        return
+
+    def init(self, args, *a, **k):
+        if isinstance(args, (list, tuple)) and args:
+            name = os.path.basename(str(args[0]))
+            if name in RUN:
+                args = [*RUN[name], *args[1:]]
+        _orig_popen_init(self, args, *a, **k)
+    init._cc = True
+    _sp.Popen.__init__ = init
+
+
+def _patch_dns() -> None:
+    """If Python's name lookup fails ([Errno 7]/[Errno 8]) ask Android's Java network stack instead."""
+    import socket
+    orig = socket.getaddrinfo
+    if getattr(orig, "_cc", False):
+        return
+
+    def gai(host, port, family=0, type=0, proto=0, flags=0):
         try:
-            p = subprocess.run([name, *args], capture_output=True, text=True, timeout=20)
-            out = (p.stdout or p.stderr).strip().splitlines()
-            lines.append(f"{name}: {'ok' if out else 'no output'} {out[0][:60] if out else ''}")
-        except Exception as e:  # noqa: BLE001
-            lines.append(f"{name}: MISSING ({e.__class__.__name__})")
+            if os.environ.get("CLIPCUTTER_FORCE_JAVA_DNS") and host and not host[0].isdigit():
+                raise socket.gaierror(8, "forced for testing")
+            return orig(host, port, family, type, proto, flags)
+        except socket.gaierror:
+            if not host or isinstance(host, bytes):
+                raise
+            try:
+                from java.net import InetAddress
+                ips = [a.getHostAddress() for a in InetAddress.getAllByName(host)]
+            except Exception:  # noqa: BLE001
+                raise socket.gaierror(8, f"can't find {host}: no internet for ClipCutter?") from None
+            num = port if isinstance(port, int) else (int(port) if str(port or "0").isdigit()
+                                                      else socket.getservbyname(str(port)))
+            out = []
+            for ip in ips:
+                fam = socket.AF_INET6 if ":" in ip else socket.AF_INET
+                if family not in (0, socket.AF_UNSPEC, fam):
+                    continue
+                addr = (ip.split("%")[0], num, 0, 0) if fam == socket.AF_INET6 else (ip, num)
+                for st in ([type] if type else [socket.SOCK_STREAM]):
+                    out.append((fam, st, proto or 6, "", addr))
+            if not out:
+                raise
+            return out
+    gai._cc = True
+    socket.getaddrinfo = gai
+
+
+def doctor() -> str:
+    """One line per tool, shown in the app's About box and at the top of every job's Log."""
+    import platform
+    lines = [f"python {sys.version.split()[0]} on {sys.platform} {platform.machine()}"]
+    for name in TOOLS:
+        lines.append(f"{name}: {TOOL_NOTES.get(name, 'not checked')}")
     try:
         import yt_dlp.version
         lines.append(f"yt-dlp {yt_dlp.version.__version__}")
@@ -99,6 +228,8 @@ def run(target: str, clips: int, listener) -> str:
     pipeline.cancelled = lambda: bool(listener.isCancelled())
     analyze.on_model_progress = lambda text: listener.progress(text, -1.0)
     t0 = time.time()
+    for line in doctor().splitlines():
+        log(line)
     try:
         cfg = make_config(clips)
         out_dir, index = pipeline.run(target.strip(), cfg)
@@ -121,6 +252,11 @@ def friendly_error(e: Exception) -> str:
         return "YouTube refused the download (HTTP 403). Update the app, or try again in a few minutes."
     if "unable to download" in low or "urlopen error" in low or "timed out" in low:
         return "Network problem while downloading. Check your connection and try again."
+    if "errno 7" in low or "errno 8" in low and ("host" in low or "name" in low or "address" in low):
+        return ("No internet for ClipCutter. Check Wi-Fi, and on Xiaomi/POCO: Settings → Apps → Manage apps → "
+                "ClipCutter → Restrict data usage → tick Wi-Fi and Mobile data.")
+    if "exec format" in low or "errno 8" in low or "permission denied" in low and "lib" in low:
+        return "A built-in tool couldn't start on this phone. Tap Log → Copy and send it to the developer."
     if "no space left" in low:
         return "Your phone is out of storage. Free some space and try again."
     return msg[:300]
@@ -161,3 +297,17 @@ def save_ai(service: str, key: str) -> str:
         return json.dumps({"ok": True, "model": data.get("api_model")})
     except Exception as e:  # noqa: BLE001
         return json.dumps({"ok": False, "error": str(e)[:200]})
+
+
+def edit_clip(path: str, title, post_caption, hook, captions) -> str:
+    """Edit box: title/post caption are saved; a new hook or new caption words re-render the clip.
+    Arguments left as None (null from Kotlin) are not changed."""
+    from clipcutter import pipeline
+    try:
+        p = Path(path)
+        rec = pipeline.edit_clip(p.parent, p.name, make_config(1), title=title, post_caption=post_caption,
+                                 hook=hook, captions=captions)
+        return json.dumps({"ok": True, "hook": rec.get("hook")}, ensure_ascii=False)
+    except Exception as e:  # noqa: BLE001
+        print(traceback.format_exc(), flush=True)
+        return json.dumps({"ok": False, "error": friendly_error(e)}, ensure_ascii=False)

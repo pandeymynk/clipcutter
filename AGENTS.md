@@ -31,7 +31,7 @@ frames, e.g. `ffmpeg -ss 3 -i output/<id>/clip_01.mp4 -frames:v 1 frame.png`.
 | file | job |
 |---|---|
 | `__init__.py` | CLI (`run`, `serve`, `add`, `track`, `discover`, `creators`, `doctor`, `dashboard`) |
-| `pipeline.py` | the main flow: ingest → analyze → transcript → score → write hooks → render, with progress callbacks |
+| `pipeline.py` | the main flow: ingest → analyze → transcript → score → write hooks → render, with progress callbacks; `edit_clip` (Edit box: new hook/caption words re-render from the cached download) |
 | `ingest.py` | yt-dlp downloads: full video (≤2 h) or audio-only (longer), platform captions (json3) → words |
 | `analyze.py` | loudness, scene cuts, chat log parsing, speech-to-text (mlx-whisper / faster-whisper) |
 | `score.py` | per-second signals → candidate moments → snap to sentence boundaries → pick N non-overlapping |

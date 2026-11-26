@@ -21,7 +21,7 @@ object Py {
             val res = File(app.filesDir, "res")
             copyAssets(app, "fonts", File(res, "fonts"))
             doctor = m.callAttr("setup", app.filesDir.absolutePath,
-                app.applicationInfo.nativeLibraryDir, res.absolutePath).toString()
+                app.applicationInfo.nativeLibraryDir, res.absolutePath, app.applicationInfo.sourceDir).toString()
             ready = true
         }
         return m
