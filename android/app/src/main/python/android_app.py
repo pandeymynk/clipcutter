@@ -201,11 +201,6 @@ def make_config(clips: int) -> dict:
     cfg["clips"] = int(clips)
     cfg["output_dir"] = str(HOME / "output")
     cfg["work_dir"] = str(HOME / ".work")
-    try:
-        import cv2  # noqa: F401  (no OpenCV build for Android yet: no facecam detection)
-    except ImportError:
-        if cfg["layout"] in ("auto", "split", "split_top") and not cfg.get("facecam"):
-            cfg["layout"] = "blur"
     return cfg
 
 
@@ -299,14 +294,32 @@ def save_ai(service: str, key: str) -> str:
         return json.dumps({"ok": False, "error": str(e)[:200]})
 
 
-def edit_clip(path: str, title, post_caption, hook, captions) -> str:
-    """Edit box: title/post caption are saved; a new hook or new caption words re-render the clip.
-    Arguments left as None (null from Kotlin) are not changed."""
+def editor_state(path: str) -> str:
+    """Options, caption words and texts for the editor screen."""
+    from clipcutter import pipeline
+    p = Path(path)
+    return json.dumps(pipeline.editor_state(p.parent, p.name, make_config(1)), ensure_ascii=False)
+
+
+def clip_frame(path: str) -> str:
+    """A still of the source video (for placing the facecam box), or "" if the download is gone."""
+    from clipcutter import pipeline
+    p = Path(path)
+    try:
+        f = pipeline.clip_frame(p.parent, p.name, make_config(1))
+        return str(f) if f else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def edit_clip(path: str, title, post_caption, hook, captions, options: str = "") -> str:
+    """Editor save: title/post caption are saved; a new hook, new caption words or changed options re-render.
+    Arguments left as None (null from Kotlin) are not changed. options = JSON of pipeline.EDIT_DEFAULTS keys."""
     from clipcutter import pipeline
     try:
         p = Path(path)
         rec = pipeline.edit_clip(p.parent, p.name, make_config(1), title=title, post_caption=post_caption,
-                                 hook=hook, captions=captions)
+                                 hook=hook, captions=captions, options=json.loads(options) if options else None)
         return json.dumps({"ok": True, "hook": rec.get("hook")}, ensure_ascii=False)
     except Exception as e:  # noqa: BLE001
         print(traceback.format_exc(), flush=True)

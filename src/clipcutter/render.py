@@ -247,7 +247,7 @@ def build_overlay(clip: dict, cfg: dict, out_dir: Path) -> Path:
         key = (show_hook, show_head, show_cta, cap[2] if cap else None, cap[3] if cap else None)
         if key not in cache:
             img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-            if show_hook:
+            if show_hook and cfg["hook"].get("text", True):   # the editor can turn the hook text off
                 draw_box_text(img, clip["hook"], hook_font, hook_y, W)
             if show_head:
                 draw_box_text(img, clip["hook"], head_font, head_y, W, SAFE_W)
@@ -323,7 +323,11 @@ def render(clip: dict, src_info: dict, video: Path, cfg: dict, out_path: Path, w
         else:   # facecam asked for but none found: fall back to the blur layout
             cfg = {**cfg, "layout": cfg["layout"] if cam else "blur", "facecam": cam}
     clip["layout"] = cfg["layout"]
+    clip["facecam"] = cfg.get("facecam")   # remembered so the editor can show / move it
     overlay = build_overlay(clip, cfg, work)
+    if cfg["layout"] in ("split", "split_top"):
+        z = 1   # zooming the hook would move the webcam out of its crop box
+
 
     boom = hook and cfg["hook"].get("boom")
     parts, concat_in = [], ""

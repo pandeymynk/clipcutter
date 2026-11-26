@@ -179,6 +179,24 @@ def make_handler(cfg: dict, jobs: Jobs):
                                         "key": (k[:4] + "…" + k[-4:]) if len(k) > 12 else ("set" if k else "")}})
             elif path == "/api/state":
                 self._json({"jobs": jobs.public(), "clips": all_clips(cfg), "creators": tracker.summary(cfg)})
+            elif path in ("/api/clips/editor", "/api/clips/frame"):
+                from urllib.parse import parse_qs
+                rel = (parse_qs(urlparse(self.path).query).get("src") or [""])[0].removeprefix("/files/")
+                mp4 = (out_root / rel).resolve()
+                if out_root not in mp4.parents or not mp4.with_suffix(".json").is_file():
+                    return self._json({"error": "clip not found"}, 404)
+                if path == "/api/clips/editor":
+                    return self._json(pipeline.editor_state(mp4.parent, mp4.name, cfg))
+                img = pipeline.clip_frame(mp4.parent, mp4.name, cfg)
+                if not img:
+                    return self._json({"error": "source video is gone"}, 404)
+                body = img.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
             elif path.startswith("/files/"):
                 self._file(out_root / unquote(path[len("/files/"):]))
             else:
@@ -199,8 +217,8 @@ def make_handler(cfg: dict, jobs: Jobs):
                     if out_root not in mp4.parents or not mp4.with_suffix(".json").is_file():
                         return self._json({"error": "clip not found"}, 404)
                     with edit_lock:   # one re-render at a time
-                        rec = pipeline.edit_clip(mp4.parent, mp4.name, json.loads(json.dumps(cfg)),
-                                                 **{k: data.get(k) for k in ("title", "post_caption", "hook", "captions")})
+                        rec = pipeline.edit_clip(mp4.parent, mp4.name, json.loads(json.dumps(cfg)), **{
+                            k: data.get(k) for k in ("title", "post_caption", "hook", "captions", "options")})
                     return self._json({"ok": True, "hook": rec["hook"]})
                 if path.startswith("/api/jobs/") and path.endswith("/cancel"):
                     return self._json(jobs.cancel(path.split("/")[3]))

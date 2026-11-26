@@ -248,6 +248,8 @@ def translate_window(pcm: np.ndarray, start: float, end: float) -> list[dict]:
     audio = np.asarray(pcm[a:b], dtype=np.float32) / 32768.0
     if audio.size < SR:
         return []
+    if whisper_backend() == "whisper.cpp":   # Android
+        return _whisper_cpp(audio, start, None, translate=True)
     common = dict(task="translate", word_timestamps=True, condition_on_previous_text=False,
                   temperature=(0.0, 0.4))
     words = []
@@ -299,7 +301,7 @@ def ggml_model(name: str) -> Path:
     return dest
 
 
-def _whisper_cpp(audio: np.ndarray, start: float, language: str | None) -> list[dict]:
+def _whisper_cpp(audio: np.ndarray, start: float, language: str | None, translate: bool = False) -> list[dict]:
     """Speech-to-text with the whisper.cpp command-line tool, one word per segment."""
     import os
     import tempfile
@@ -315,7 +317,8 @@ def _whisper_cpp(audio: np.ndarray, start: float, language: str | None) -> list[
             w.setframerate(SR)
             w.writeframes((np.clip(audio, -1, 1) * 32767).astype(np.int16).tobytes())
         subprocess.run(["whisper-cli", "-m", str(model), "-f", str(wav), "-l", language or "auto",
-                        "-t", str(threads), "-ml", "1", "-sow", "-sns", "-np", "-oj", "-of", str(Path(td) / "out")],
+                        "-t", str(threads), "-ml", "1", "-sow", "-sns", "-np", "-oj", "-of", str(Path(td) / "out"),
+                        *(["-tr"] if translate else [])],
                        check=True, capture_output=True)
         data = json.loads((Path(td) / "out.json").read_text(encoding="utf-8", errors="replace"))
     words = []

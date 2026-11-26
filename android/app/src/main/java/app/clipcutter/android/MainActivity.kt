@@ -96,17 +96,19 @@ class MainActivity : Activity() {
         handleShare(intent)
         io.execute { Py.module(this) }   // warm up Python (first start unpacks it: a few seconds)
         // Automation hook for tests: adb shell am start -n app.clipcutter.android/.MainActivity --es autostart <url>
-        intent.getStringExtra("autostart")?.let { url.setText(it); startFromUrl(intent.getIntExtra("clips", 1)) }
+        intent.getStringExtra("autostart")?.let { if (it.startsWith("/")) start(it, intent.getIntExtra("clips", 1)) else { url.setText(it); startFromUrl(intent.getIntExtra("clips", 1)) } }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleShare(intent)
-        intent.getStringExtra("autostart")?.let { url.setText(it); startFromUrl(intent.getIntExtra("clips", 1)) }
+        intent.getStringExtra("autostart")?.let { if (it.startsWith("/")) start(it, intent.getIntExtra("clips", 1)) else { url.setText(it); startFromUrl(intent.getIntExtra("clips", 1)) } }
     }
 
     override fun onResume() {
         super.onResume()
+        thumbs.clear()
+        loadClips()   // back from the editor: show the re-rendered clip
         ui.post(tick)
     }
 
@@ -232,68 +234,10 @@ class MainActivity : Activity() {
         v.findViewById<Button>(R.id.share).setOnClickListener { share(file, caption) }
         v.findViewById<Button>(R.id.save).setOnClickListener { saveToGallery(file) }
         v.findViewById<Button>(R.id.copy).setOnClickListener { copy("$title\n\n$caption") }
-        v.findViewById<Button>(R.id.edit).setOnClickListener { editDialog(rec) }
+        v.findViewById<Button>(R.id.edit).setOnClickListener {
+            startActivity(Intent(this, EditorActivity::class.java).putExtra("path", rec.getString("path")))
+        }
         return v
-    }
-
-    private fun clipWords(rec: JSONObject): String {
-        val words = rec.optJSONArray("words")
-        if (words != null && words.length() > 0)
-            return (0 until words.length()).joinToString(" ") { words.getJSONObject(it).optString("w") }
-        return rec.optString("transcript").trim().split(Regex("\\s+")).joinToString(" ")
-    }
-
-    /** Edit title / post caption (saved as text) or the hook / on-video captions (re-renders the clip). */
-    private fun editDialog(rec: JSONObject) {
-        val pad = (16 * resources.displayMetrics.density).toInt()
-        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(pad, pad / 2, pad, 0) }
-        fun field(label: String, value: String, lines: Int, hint: String? = null): EditText {
-            box.addView(TextView(this).apply {
-                text = label; setTextColor(getColor(R.color.muted)); textSize = 12f; setPadding(0, pad / 2, 0, 0)
-            })
-            val e = EditText(this).apply {
-                setText(value); textSize = 15f
-                if (lines > 1) { minLines = 2; maxLines = lines; isSingleLine = false } else isSingleLine = true
-            }
-            box.addView(e)
-            hint?.let { box.addView(TextView(this).apply { text = it; setTextColor(getColor(R.color.muted)); textSize = 11f }) }
-            return e
-        }
-        val oldHook = rec.optString("hook")
-        val oldWords = clipWords(rec)
-        val hook = field("Hook (big text on the video)", oldHook, 1)
-        val words = field("Captions on the video", oldWords, 6,
-            "Fix wrong words. Same number of words keeps the timing; more or fewer are spread over the clip.")
-        val title = field("Title", rec.optString("title"), 2)
-        val caption = field("Post caption + hashtags", rec.optString("post_caption"), 5,
-            "Title and caption save instantly. A new hook or captions re-render the video (about 10-30 s).")
-        AlertDialog.Builder(this).setTitle("Edit clip")
-            .setView(ScrollView(this).apply { addView(box) })
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Save") { _, _ ->
-                val newHook = hook.text.toString().trim().takeIf { it.isNotEmpty() && it != oldHook.trim() }
-                val newWords = words.text.toString().trim().split(Regex("\\s+")).joinToString(" ")
-                    .takeIf { it != oldWords }
-                saveEdit(rec.getString("path"), title.text.toString(), caption.text.toString(), newHook, newWords)
-            }.show()
-    }
-
-    private fun saveEdit(path: String, title: String, caption: String, hook: String?, words: String?) {
-        val redo = hook != null || words != null
-        if (redo && Job.running) { toast("Wait for the current job to finish, then edit the hook or captions."); return }
-        val wait = if (!redo) null else AlertDialog.Builder(this).setTitle("Re-rendering clip…")
-            .setView(ProgressBar(this).apply { isIndeterminate = true; setPadding(0, 40, 0, 40) })
-            .setCancelable(false).show()
-        io.execute {
-            val r = try {
-                JSONObject(Py.module(this).callAttr("edit_clip", path, title, caption, hook, words).toString())
-            } catch (e: Exception) { JSONObject().put("ok", false).put("error", e.message) }
-            ui.post {
-                wait?.dismiss()
-                toast(if (r.optBoolean("ok")) (if (redo) "Clip re-rendered" else "Saved") else r.optString("error"))
-                loadClips()
-            }
-        }
     }
 
     private fun loadThumb(file: File, view: ImageView) {

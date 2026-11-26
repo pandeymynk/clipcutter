@@ -199,6 +199,17 @@ def whisper_backend() -> str:
     return "mlx" if APPLE_SILICON else "faster-whisper"
 
 
+def face_backend() -> str | None:
+    """Facecam detection: OpenCV on desktop, the phone's own face detector on Android (no OpenCV build there)."""
+    try:
+        import cv2
+        if hasattr(cv2, "CascadeClassifier"):
+            return "opencv"
+    except ImportError:
+        pass
+    return "android" if IS_ANDROID else None
+
+
 def js_runtimes() -> dict:
     """yt-dlp needs a JavaScript runtime to download from YouTube (else HTTP 403).
     The desktop app ships deno; give yt-dlp its full path so it never picks up a broken system one."""

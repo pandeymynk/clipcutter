@@ -144,6 +144,11 @@ Key rule: the website never downloads a whole video. It analyses text, then down
   `android_app.setup()` symlinks them into `<files>/bin`. ffmpeg needs `--enable-indev=lavfi` (the hook "boom")
   and must be built **without SVE** (emulators/devices that report it but trap it crash with SIGILL).
   Chaquopy's FreeType can't draw colour emoji (`render._emoji_face` checks and skips them).
+- **Facecam on Android:** `system.face_backend()` is "opencv" on desktop and "android" (android.media.FaceDetector
+  through Chaquopy) on the phone; both feed `facecam._pick` (same small/off-centre/stable rule). Split layouts don't
+  zoom the hook (the zoom moved the webcam out of its crop box).
+- **Editor:** `pipeline.edit_clip(options=…)` keeps per-clip settings in `record["edit"]` (keys = `EDIT_DEFAULTS`),
+  English captions are cached in `record["words_en"]`; desktop `/api/clips/editor|frame|edit`, Android `EditorActivity`.
 - **Hook input:** `render.render` reads the video twice (main + hook). With one input ffmpeg buffers every frame
   between the main start and the later hook: 3+ GB at 1080p60, which got ffmpeg OOM-killed on a 4 GB phone.
 - **OS-specific code goes in `system.py` only.** Don't hard-code `/System/Library/...` or `videotoolbox` anywhere else.
