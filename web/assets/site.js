@@ -19,12 +19,15 @@
   // rotating headline words
   $$(".rot").forEach(r => {
     const w = $$("span", r); let i = 0;
-    w[0].classList.add("on");
+    const fit = () => { r.style.width = w[i].getBoundingClientRect().width + "px"; };
+    w[0].classList.add("on"); fit();
+    addEventListener("resize", fit);
+    if (document.fonts) document.fonts.ready.then(fit);
     if (calm || w.length < 2) return;
     setInterval(() => {
       w[i].classList.remove("on"); w[i].classList.add("out");
       const prev = i; setTimeout(() => w[prev].classList.remove("out"), 650);
-      i = (i + 1) % w.length; w[i].classList.add("on");
+      i = (i + 1) % w.length; w[i].classList.add("on"); fit();
     }, 2200);
   });
 

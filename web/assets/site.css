@@ -55,7 +55,7 @@ code{font:13px ui-monospace,SFMono-Regular,Menlo,monospace;background:#161b25;bo
 h1{font-size:clamp(42px,7vw,86px);line-height:1.02;letter-spacing:-.045em;margin:26px auto 22px;font-weight:800;max-width:1000px}
 .grad{background:linear-gradient(90deg,#8fb5ff,#c4a6ff 45%,#ff8fc8);-webkit-background-clip:text;background-clip:text;color:transparent;background-size:200% 100%;animation:shine 6s linear infinite}
 @keyframes shine{to{background-position:-200% 0}}
-.rot{display:inline-grid;justify-items:center;vertical-align:bottom;height:1.04em;overflow:hidden}
+.rot{display:grid;justify-items:center;height:1.08em;overflow:hidden;white-space:nowrap;width:auto!important}
 .rot span{grid-area:1/1;transform:translateY(105%);opacity:0;transition:transform .6s cubic-bezier(.2,.8,.2,1),opacity .6s}
 .rot span.on{transform:none;opacity:1}
 .rot span.out{transform:translateY(-105%);opacity:0}

@@ -45,7 +45,7 @@ def head(title, desc, path="", image="img/video-thumb.jpg"):
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/site.css">
+<link rel="stylesheet" href="assets/site.css?v=5">
 </head>
 <body>
 """
@@ -81,7 +81,7 @@ FOOT = f"""<footer>
     <div class="fbot"><span>© <span data-year>2026</span> ClipCutter</span><span>Not affiliated with Rockstar Games, YouTube, Twitch, Kick or any campaign platform.</span></div>
   </div>
 </footer>
-<script src="assets/site.js" defer></script>
+<script src="assets/site.js?v=5" defer></script>
 </body>
 </html>
 """
@@ -136,7 +136,7 @@ def index():
   <div class="aurora"><i></i><i></i><i></i></div><div class="grid-bg"></div>
   <div class="wrap">
     <span class="pill rv"><b>NEW</b>GTA 6 is out. Clip it for free.</span>
-    <h1 class="rv d1">Turn any <span class="rot"><span class="grad">GTA 6 stream</span><span class="grad">Twitch VOD</span><span class="grad">podcast</span><span class="grad">YouTube video</span></span><br>into viral clips.</h1>
+    <h1 class="rv d1">Turn any <span class="rot"><span class="grad">GTA 6 stream</span><span class="grad">Twitch VOD</span><span class="grad">podcast</span><span class="grad">YouTube video</span></span>into viral clips.</h1>
     <p class="lead rv d2">Paste a link. ClipCutter finds the best moments and makes vertical clips with a hook and word-by-word captions. It runs on your own device. No code, no API keys, ₹0.</p>
     <div class="ctas rv d3">
       <a class="btn primary" href="download.html">{DL}Download free</a>
