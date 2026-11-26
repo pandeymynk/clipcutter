@@ -7,6 +7,9 @@ from pathlib import Path
 WEB = Path(__file__).resolve().parents[1] / "web"
 SITE = "https://clipcutter.in"
 REL = "https://github.com/pandeymynk/clipcutter/releases/latest"
+VERSION = "0.2.2"   # the GitHub release the download buttons point at (files are named with it)
+FILE = f"https://github.com/pandeymynk/clipcutter/releases/download/v{VERSION}/ClipCutter-{VERSION}"
+EXE, DMG, APK = f"{FILE}-windows-x64-setup.exe", f"{FILE}-mac-arm64.dmg", f"{FILE}-android-arm64.apk"
 REPO = "https://github.com/pandeymynk/clipcutter"
 YT = "https://www.youtube.com/channel/UC2say3EqnwX8rt2Wl0jIXGg"
 VIDEO = "https://www.youtube.com/watch?v=IZMwiKB4aTA"
@@ -90,13 +93,13 @@ FOOT = f"""<footer>
 def plat_cards():
     return f"""<div class="os3">
   <div class="plat rv d1" data-os="win"><div class="pi">{WIN}</div><b>Windows</b><span>Windows 10 / 11 · 64-bit</span>
-    <a class="btn primary" href="{REL}" target="_blank" rel="noopener">{DL}Download .exe</a>
+    <a class="btn primary" href="{EXE}" download>{DL}Download .exe</a>
     <small>If "Windows protected your PC" appears: More info → Run anyway.</small></div>
   <div class="plat rv d2" data-os="mac"><div class="pi">{MAC}</div><b>macOS</b><span>Apple chip · M1, M2, M3, M4</span>
-    <a class="btn primary" href="{REL}" target="_blank" rel="noopener">{DL}Download .dmg</a>
+    <a class="btn primary" href="{DMG}" download>{DL}Download .dmg</a>
     <small>Drag to Applications, then right-click → Open the first time.</small></div>
   <div class="plat rv d3" data-os="android"><div class="pi">{AND}</div><b>Android<i>Beta</i></b><span>Android 10+ · runs fully offline</span>
-    <a class="btn primary" href="{REL}" target="_blank" rel="noopener">{DL}Download .apk</a>
+    <a class="btn primary" href="{APK}" download>{DL}Download .apk</a>
     <small>Allow "Install unknown apps" for your browser when asked.</small></div>
 </div>"""
 
