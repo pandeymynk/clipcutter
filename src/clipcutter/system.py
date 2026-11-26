@@ -12,6 +12,9 @@ from pathlib import Path
 IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform.startswith("win")
 APPLE_SILICON = IS_MAC and platform.machine() == "arm64"
+# Android app (Chaquopy): the tools are arm64 binaries in the app's native-library folder, linked into
+# <data>/bin by android/app/src/main/python/android_app.py, which also sets the CLIPCUTTER_* folders.
+IS_ANDROID = sys.platform == "android" or hasattr(sys, "getandroidapilevel")
 WINFONTS = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts"
 
 # ---------- desktop app (PyInstaller bundle) ----------
@@ -24,6 +27,8 @@ REPO = Path(__file__).resolve().parents[2]
 
 def resource_dir() -> Path:
     """Where read-only files live: the bundle in the app, the repo when run from source."""
+    if os.environ.get("CLIPCUTTER_RESOURCES"):   # Android: fonts copied out of the APK
+        return Path(os.environ["CLIPCUTTER_RESOURCES"])
     return BUNDLE if FROZEN else REPO
 
 
@@ -115,7 +120,8 @@ BOLD_FONTS = [
     "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
     "/usr/share/fonts/noto/NotoSans-Bold.ttf",
-    str(resource_dir() / "fonts" / "NotoSans-Black.ttf"),         # shipped in the desktop app
+    str(resource_dir() / "fonts" / "NotoSans-Black.ttf"),         # shipped in the desktop and Android apps
+    "/system/fonts/Roboto-Black.ttf",                                # Android <= 11
 ]
 # Hindi / Devanagari (path, index inside .ttc)
 HINDI_FONTS = [
@@ -126,7 +132,8 @@ HINDI_FONTS = [
     ("/usr/share/fonts/opentype/noto/NotoSansDevanagari-Bold.ttf", 0),
     ("/usr/share/fonts/noto/NotoSansDevanagari-Bold.ttf", 0),
     ("/usr/share/fonts/truetype/lohit-devanagari/Lohit-Devanagari.ttf", 0),
-    (str(resource_dir() / "fonts" / "NotoSansDevanagari-Bold.ttf"), 0),   # shipped in the desktop app
+    (str(resource_dir() / "fonts" / "NotoSansDevanagari-Bold.ttf"), 0),   # shipped in the desktop and Android apps
+    ("/system/fonts/NotoSansDevanagari-Bold.otf", 0), ("/system/fonts/NotoSansDevanagari-VF.ttf", 0),   # Android
 ]
 EMOJI_FONTS = [
     "/System/Library/Fonts/Apple Color Emoji.ttc",
@@ -134,6 +141,7 @@ EMOJI_FONTS = [
     "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
     "/usr/share/fonts/noto/NotoColorEmoji.ttf",
     "/usr/share/fonts/google-noto-emoji/NotoColorEmoji.ttf",
+    "/system/fonts/NotoColorEmoji.ttf",                              # Android
 ]
 
 
@@ -168,6 +176,9 @@ def _encoders() -> str:
 def encoder_args(bitrate: str) -> list[str]:
     """Hardware H.264 encoder when there is one (much faster), else libx264."""
     enc = _encoders()
+    if IS_ANDROID:   # phone CPUs: a faster x264 preset (the app's ffmpeg has no hardware encoder)
+        return ["-c:v", "libx264", "-preset", os.environ.get("CLIPCUTTER_X264_PRESET", "superfast"),
+                "-crf", "21", "-pix_fmt", "yuv420p"]
     if IS_MAC and "h264_videotoolbox" in enc:
         return ["-c:v", "h264_videotoolbox", "-b:v", bitrate, "-profile:v", "high"]
     if "h264_nvenc" in enc and shutil.which("nvidia-smi"):
@@ -183,6 +194,8 @@ def hwaccel_args() -> list[str]:
 # ---------- speech-to-text ----------
 
 def whisper_backend() -> str:
+    if IS_ANDROID:
+        return "whisper.cpp"
     return "mlx" if APPLE_SILICON else "faster-whisper"
 
 
@@ -190,6 +203,9 @@ def js_runtimes() -> dict:
     """yt-dlp needs a JavaScript runtime to download from YouTube (else HTTP 403).
     The desktop app ships deno; give yt-dlp its full path so it never picks up a broken system one."""
     rt = {}
+    if IS_ANDROID:   # no deno/node builds for Android: the app ships QuickJS-ng as "qjs"
+        qjs = shutil.which("qjs")
+        return {"quickjs": {"path": qjs}} if qjs else {}
     for name in ("deno", "node"):
         path = shutil.which(name)
         if path:

@@ -30,7 +30,9 @@ def _emoji_face() -> tuple[ImageFont.FreeTypeFont, int] | None:
         return None
     for px in (160, 109, 128):
         try:
-            return ImageFont.truetype(EMOJI_FONT, px), px
+            f = ImageFont.truetype(EMOJI_FONT, px)
+            f.getbbox("🔥")   # old FreeType builds (Android app) load colour fonts but can't draw them
+            return f, px
         except OSError:
             continue
     return None
@@ -323,13 +325,19 @@ def render(clip: dict, src_info: dict, video: Path, cfg: dict, out_path: Path, w
     clip["layout"] = cfg["layout"]
     overlay = build_overlay(clip, cfg, work)
 
+    boom = hook and cfg["hook"].get("boom")
     parts, concat_in = [], ""
     if hook:
+        # The hook plays first but sits later in the video, so it reads its own copy of the input:
+        # with one shared input ffmpeg buffers every decoded frame in between (GBs at 1080p60; phones run out).
         hs, he = clip["hook_start"], clip["hook_start"] + clip["hook_dur"]
+        hseek = max(0.0, hs - 1.0)
+        hi = 3 if boom else 2
+        hrel = lambda t: f"{t - hseek:.3f}"  # noqa: E731
         parts.append(
-            f"[0:v]trim=start={rel(hs)}:end={rel(he)},setpts=PTS-STARTPTS,fps={fps},"
+            f"[{hi}:v]trim=start={hrel(hs)}:end={hrel(he)},setpts=PTS-STARTPTS,fps={fps},"
             f"crop=w='trunc(iw/{z}/2)*2':h='trunc(ih/{z}/2)*2',scale={SW}:{SH},setsar=1[v0];"
-            f"[0:a]atrim=start={rel(hs)}:end={rel(he)},asetpts=PTS-STARTPTS,aresample=48000[a0]"
+            f"[{hi}:a]atrim=start={hrel(hs)}:end={hrel(he)},asetpts=PTS-STARTPTS,aresample=48000[a0]"
         )
         concat_in += "[v0][a0]"
     parts.append(
@@ -346,7 +354,6 @@ def render(clip: dict, src_info: dict, video: Path, cfg: dict, out_path: Path, w
     # decode on the Mac's hardware video engine (frees the CPU for filters)
     inputs = [*system.hwaccel_args(), "-ss", f"{seek:.3f}", "-t", f"{span:.3f}", "-i", str(video),
               "-f", "concat", "-safe", "0", "-i", str(overlay)]
-    boom = hook and cfg["hook"].get("boom")
     if boom:
         inputs += ["-f", "lavfi", "-i",
                    "aevalsrc='0.9*sin(2*PI*(45+180*exp(-9*t))*t)*exp(-3.5*t)':s=48000:d=1.2"]
@@ -358,6 +365,8 @@ def render(clip: dict, src_info: dict, video: Path, cfg: dict, out_path: Path, w
     else:
         audio_src = "[ca]"
     parts.append(f"{audio_src}loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[outa]")
+    if hook:   # input index 2 (no boom) or 3 (after the boom), matching `hi` above
+        inputs += [*system.hwaccel_args(), "-ss", f"{hseek:.3f}", "-t", f"{he - hseek + 1:.3f}", "-i", str(video)]
 
     cmd = ["ffmpeg", "-v", "error", "-y", *inputs,
            "-filter_complex", ";".join(parts),

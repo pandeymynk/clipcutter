@@ -183,6 +183,7 @@ def run(target: str, cfg: dict, chat: str | None = None, out_sub: str = "") -> t
         if src.video:
             progress(f"Clip {k} of {len(chosen)}: editing (hook, captions, 9:16)…", _span(RENDER, base_f + step_f * 0.2))
             render.render(clip, info, src.video, cfg, out, clip_work)
+            video_path, offset = src.video, 0.0
         else:
             a = max(0.0, min(m.start, hook_start) - 3)
             b = min(info["duration"], max(m.end, hook_start + hook_dur) + 3)
@@ -195,6 +196,7 @@ def run(target: str, cfg: dict, chat: str | None = None, out_sub: str = "") -> t
             shifted = _shift(clip, a)
             render.render(shifted, analyze.probe(section), section, cfg, out, clip_work)
             clip["layout"] = shifted.get("layout")
+            video_path, offset = section, a
 
         record = {
             "file": out.name, "source": src.url or str(src.video), "source_title": src.title,
@@ -203,6 +205,8 @@ def run(target: str, cfg: dict, chat: str | None = None, out_sub: str = "") -> t
             "virality": virality(m.score), "layout": clip.get("layout"),
             "signals": m.reasons, "transcript": transcript, **meta,
             "post_caption": f"{meta['description']} {' '.join(meta['hashtags'])}".strip(),
+            # for edit_clip(): re-render with new hook/caption text without re-downloading
+            "words": m.words, "video": str(video_path), "offset": offset,
         }
         if cfg.get("campaign"):   # the brief's exact caption text + hashtags
             from . import campaigns
@@ -259,6 +263,106 @@ def rerender(out_dir: str, cfg: dict) -> None:
             rec["post_caption"] = campaigns.post_caption(cfg["campaign"], writer.censor(rec["hook"]))
         rec_path.write_text(json.dumps(rec, indent=2, ensure_ascii=False))
         log(f"{mp4.name} re-rendered ({rec['layout']})")
+
+
+def edit_clip(out_dir: str | Path, name: str, cfg: dict, title: str | None = None,
+              post_caption: str | None = None, hook: str | None = None, captions: str | None = None) -> dict:
+    """Edit a finished clip. Title/post caption are saved as text; a new hook or new on-video caption words
+    re-render the clip from the downloaded video (word timings are kept, or spread over the clip if the
+    number of words changed). Returns the updated record."""
+    out = Path(out_dir)
+    stem = Path(name).stem
+    rec_path, mp4 = out / f"{stem}.json", out / f"{stem}.mp4"
+    rec = json.loads(rec_path.read_text(encoding="utf-8"))
+    if title is not None:
+        rec["title"] = title.strip()
+    if post_caption is not None:
+        rec["post_caption"] = post_caption.strip()
+    rerender = False
+    if hook is not None and hook.strip() and hook.strip() != rec.get("hook"):
+        rec["hook"] = hook.strip()
+        rerender = True
+    words = rec.get("words") or _spread(rec.get("transcript", "").split(), rec["start"], rec["end"])
+    if captions is not None and captions.split() != [w["w"] for w in words]:
+        words = _retime(words, captions.split(), rec["start"], rec["end"])
+        rerender = True
+    rec["words"], rec["transcript"] = words, " ".join(w["w"] for w in words)
+    _save_record(out, rec_path, rec)   # text edits are kept even if the re-render below fails
+    if not rerender:
+        return rec
+    video, offset = _clip_source(rec, out, stem, cfg)
+    if not video:
+        raise RuntimeError("The downloaded video for this clip is gone, so the hook/captions can't be re-rendered. "
+                           "Title and post caption were saved.")
+    if rec.get("campaign"):
+        from . import campaigns
+        cfg = json.loads(json.dumps(cfg))
+        campaigns.apply(cfg, rec["campaign"])   # same CTA / logo / censoring as the first render
+    cfg = {**cfg, "layout": rec.get("layout") or cfg["layout"]}
+    start, end, peak = rec["start"], rec["end"], rec["peak"]
+    hook_start = max(start, peak - 1.0)
+    hook_dur = min(cfg["hook"]["seconds"], end - hook_start) if cfg["hook"]["enabled"] else 0.0
+    clip = {"start": start, "end": end, "peak": peak, "hook_start": hook_start, "hook_dur": hook_dur,
+            "words": words, "hook": rec["hook"]}
+    if offset:
+        clip = _shift(clip, offset)
+    tmp = out / f"{stem}.edit.mp4"
+    work = Path(cfg["work_dir"]) / out.name / f"{stem}_edit"
+    render.render(clip, analyze.probe(video), video, cfg, tmp, work)
+    tmp.replace(mp4)
+    return rec
+
+
+def _clip_source(rec: dict, out: Path, stem: str, cfg: dict) -> tuple[Path | None, float]:
+    """The downloaded video a clip was cut from, and where it starts in the original (0 for full videos).
+    Clips made before records stored "video" are matched to .work/downloads like rerender() does."""
+    if rec.get("video") and Path(rec["video"]).is_file():
+        return Path(rec["video"]), float(rec.get("offset") or 0.0)
+    work = Path(cfg["work_dir"])
+    for f in (work / "downloads").glob("*.video.*"):
+        if f.suffix in ingest.MEDIA_EXT and ingest._slug(f.name.split(".video.")[0]).lower() == out.name:
+            return f, 0.0
+    section = work / out.name / stem / "section.mp4"
+    if section.is_file():
+        hook_start = max(rec["start"], rec["peak"] - 1.0)
+        return section, max(0.0, min(rec["start"], hook_start) - 3)
+    src = rec.get("source") or ""
+    if src and not src.startswith("http") and Path(src).is_file():   # local file
+        return Path(src), 0.0
+    return None, 0.0
+
+
+def _save_record(out: Path, rec_path: Path, rec: dict) -> None:
+    rec_path.write_text(json.dumps(rec, indent=2, ensure_ascii=False), encoding="utf-8")
+    idx = out / "index.json"
+    try:
+        items = json.loads(idx.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    items = [rec if it.get("file") == rec["file"] else it for it in items]
+    idx.write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _spread(tokens: list[str], a: float, b: float) -> list[dict]:
+    """Give words without timings an even share of [a, b], longer words a bit more."""
+    if not tokens:
+        return []
+    weights = [len(t) + 2 for t in tokens]
+    total, t, words = sum(weights), a, []
+    for tok, wt in zip(tokens, weights):
+        d = (b - a) * wt / total
+        words.append({"w": tok, "s": round(t, 2), "e": round(t + d, 2)})
+        t += d
+    return words
+
+
+def _retime(old: list[dict], tokens: list[str], start: float, end: float) -> list[dict]:
+    """New caption words: same count keeps each word's timing; otherwise spread over the old words' span."""
+    if len(tokens) == len(old):
+        return [{**w, "w": tok} for w, tok in zip(old, tokens)]
+    a = old[0]["s"] if old else start
+    b = old[-1]["e"] if old else end
+    return _spread(tokens, a, b)
 
 
 def _shift(clip: dict, offset: float) -> dict:

@@ -134,6 +134,14 @@ pre{margin:8px 0 0;max-height:160px;overflow:auto;background:var(--bg);border-ra
 .cr .row .btn{margin-left:auto}
 .hist{display:grid;gap:10px}
 
+dialog.ed{background:var(--panel);color:var(--txt);border:1px solid var(--line2);border-radius:var(--r);padding:20px;width:min(560px,calc(100vw - 32px));max-height:calc(100vh - 32px)}
+dialog.ed::backdrop{background:rgba(0,0,0,.6)}
+dialog.ed h3{margin:0 0 4px}
+dialog.ed label{display:block;font-size:12px;color:var(--mut);margin:12px 0 4px}
+dialog.ed input,dialog.ed textarea{width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--line2);color:var(--txt);border-radius:12px;padding:10px 12px;outline:0;font:inherit;resize:vertical}
+dialog.ed input:focus,dialog.ed textarea:focus{border-color:var(--acc)}
+dialog.ed .hint{font-size:11px;color:var(--mut);margin-top:3px}
+dialog.ed .row{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
 .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(20px);background:var(--txt);color:#000;font-weight:700;padding:10px 16px;border-radius:12px;opacity:0;transition:.2s;pointer-events:none;z-index:20}
 .toast.on{opacity:1;transform:translateX(-50%)}
 
@@ -231,6 +239,16 @@ pre{margin:8px 0 0;max-height:160px;overflow:auto;background:var(--bg);border-ra
     <span id="updMsg"></span></div>
 </main>
 <div class="toast" id="toast"></div>
+<dialog class="ed" id="ed"><form method="dialog" id="edForm">
+  <h3>Edit clip</h3>
+  <label for="edHook">Hook (big text on the video)</label><input id="edHook" maxlength="120">
+  <label for="edWords">Captions on the video</label><textarea id="edWords" rows="5"></textarea>
+  <div class="hint">Fix wrong words here. Same number of words keeps the timing; more or fewer are spread over the clip.</div>
+  <label for="edTitle">Title</label><input id="edTitle" maxlength="150">
+  <label for="edCap">Post caption + hashtags</label><textarea id="edCap" rows="3"></textarea>
+  <div class="hint">Title and post caption save instantly. A new hook or new captions re-render the video (a few seconds).</div>
+  <div class="row"><button class="btn ghost sm" value="cancel" formnovalidate>Cancel</button><button class="btn sm" id="edSave" value="save">Save</button></div>
+</form></dialog>
 
 <script>
 const $ = s => document.querySelector(s);
@@ -280,6 +298,28 @@ async function stopJob(id){ if (!confirm("Stop this job? Clips already made are 
   try { await post(`/api/jobs/${id}/cancel`); toast("Stopping…"); refresh(); } catch(e){ toast(e.message); } }
 function copyCap(btn){ navigator.clipboard.writeText(btn.dataset.copy).then(() => toast("Caption copied ✓"), () => toast("Couldn't copy")); }
 
+let editing = null;
+function clipWords(c){ return (c.words && c.words.length ? c.words.map(w => w.w) : (c.transcript || "").split(/\s+/)).join(" ").trim(); }
+function editClip(src){
+  const c = state.clips.find(x => x.src === src); if (!c) return;
+  editing = c;
+  $("#edHook").value = c.hook || ""; $("#edWords").value = clipWords(c);
+  $("#edTitle").value = c.title || ""; $("#edCap").value = c.post_caption || "";
+  $("#ed").showModal();
+}
+$("#edForm").addEventListener("submit", async e => {
+  if (e.submitter?.value !== "save" || !editing) return;
+  e.preventDefault();
+  const c = editing, btn = $("#edSave"), body = {src: c.src, title: $("#edTitle").value, post_caption: $("#edCap").value};
+  if ($("#edHook").value.trim() !== (c.hook || "").trim()) body.hook = $("#edHook").value;
+  if ($("#edWords").value.trim().split(/\s+/).join(" ") !== clipWords(c)) body.captions = $("#edWords").value;
+  const redo = body.hook !== undefined || body.captions !== undefined;
+  btn.disabled = true; btn.textContent = redo ? "Re-rendering…" : "Saving…";
+  try { await post("/api/clips/edit", body); $("#ed").close(); toast(redo ? "Clip re-rendered ✓" : "Saved ✓"); lastClipKey = ""; await refresh(); }
+  catch(err){ toast(err.message); }
+  finally { btn.disabled = false; btn.textContent = "Save"; }
+});
+
 function jobCard(j, withLog){
   const pill = {done:["ok","done"],running:["run","working"],queued:["","waiting"],failed:["bad","failed"],stopped:["","stopped"]}[j.status] || ["",j.status];
   const end = j.finished || Date.now()/1000;
@@ -306,10 +346,11 @@ function jobCard(j, withLog){
 function scoreCls(v){ return v >= 70 ? "hi" : v >= 45 ? "mid" : "lo"; }
 function clipCard(c){
   return `<div class="clip">
-    <div class="vid"><video src="${esc(c.src)}" controls preload="metadata" playsinline></video>
+    <div class="vid"><video src="${esc(c.src)}?v=${Math.round(c.mtime||0)}" controls preload="metadata" playsinline></video>
       <div class="score ${scoreCls(c.virality||0)}">${c.virality ?? "–"} <small>virality</small></div></div>
     <div class="b"><div class="hook">${esc(c.hook)}</div><div class="cap">${esc(c.post_caption)}</div>
       <div class="acts"><button class="btn sm" data-copy="${esc(c.post_caption)}" onclick="copyCap(this)">Copy caption</button>
+      <button class="btn ghost sm" data-src="${esc(c.src)}" onclick="editClip(this.dataset.src)">Edit</button>
       <a class="btn ghost sm" href="${esc(c.src)}" download>Download</a></div></div></div>`;
 }
 function groups(clips){
